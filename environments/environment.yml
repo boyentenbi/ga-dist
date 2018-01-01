@@ -1,0 +1,7 @@
+name: ga_dist
+channels:
+- defaults
+dependencies:
+- libgcc-ng=7.2.0=h7cc24e2_2
+- redis=4.0.2=h6805cf8_0
+prefix: /home/pc517/anaconda3/envs/ga_dist
