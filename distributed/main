@@ -1,0 +1,20 @@
+import json
+import redis
+
+# Load the experiment from file
+
+# start the master server
+
+master_redis = redis.StrictRedis(host="localhost", port="6379", db=0)
+master_redis.set('foo', 'bar')
+master_redis.set('foo', 'baz')
+x = master_redis.get('foo')
+print(x)
+
+# start the workers subscriptions
+
+worker_redis = redis.StrictRedis(host = "localhost", port="6380", db = 1)
+
+p = master_redis.pubsub(ignore_subscribe_messages = True)
+
+p.subscribe(TASK_CHANNEL)
