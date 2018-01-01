@@ -26,7 +26,7 @@
 ##SBATCH --no-requeue
 
 #! Do not change:
-#SBATCH -p sandybridge
+#SBATCH -p skylake
 
 #! sbatch directives end here (put any additional directives above this line)
 
