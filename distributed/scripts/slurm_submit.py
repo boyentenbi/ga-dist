@@ -72,7 +72,7 @@ class DistributedTF(object):
                 print(name2.device)
                 full_name = name1 + name2
 
-            with tf.device("/job:{}/task:2".format(self.job_name)):
+            with tf.device("/job:{}/task:0".format(self.job_name)):
                 init = tf.global_variables_initializer()
 
             with tf.Session(server.target) as sess:
