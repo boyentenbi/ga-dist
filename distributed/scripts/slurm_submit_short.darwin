@@ -54,16 +54,16 @@ module purge                               # Removes all modules still loaded
 module load default-impi                   # REQUIRED - loads the basic environment
 
 #! Insert additional module load commands after this line if needed:
-source activate ga-dist
+source activate ga
 
 #! Full path to application executable: 
-application="python slurm_submit.py"
+application="python scripts/slurm_submit.py"
 
 #! Run options for the application:
 options=""
 
 #! Work directory (i.e. where the job will run):
-workdir="$SLURM_SUBMIT_DIR"  # The value of SLURM_SUBMIT_DIR sets workdir to the directory
+workdir="~/ga-dist/distributed"  # The value of SLURM_SUBMIT_DIR sets workdir to the directory
                              # in which sbatch is run.
 
 #! Are you using OpenMP (NB this is unrelated to OpenMPI)? If so increase this

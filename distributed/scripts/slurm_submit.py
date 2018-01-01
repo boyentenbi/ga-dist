@@ -27,7 +27,7 @@ class DistributedTF(object):
         self.node_list = None
         self.node_id = None
         self.num_nodes = None
-        self.job_name = "dist_tf_demo"
+        self.job_name = "ga_dist_test"
         self.setup_cluster_details()
 
         if self.node_id == 0:
