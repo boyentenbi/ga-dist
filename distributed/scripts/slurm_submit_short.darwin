@@ -63,7 +63,7 @@ application="python scripts/slurm_submit.py"
 options=""
 
 #! Work directory (i.e. where the job will run):
-workdir="~/ga-dist/distributed"  # The value of SLURM_SUBMIT_DIR sets workdir to the directory
+workdir="/home/pc517/ga-dist/distributed"  # The value of SLURM_SUBMIT_DIR sets workdir to the directory
                              # in which sbatch is run.
 
 #! Are you using OpenMP (NB this is unrelated to OpenMPI)? If so increase this
