@@ -150,7 +150,9 @@ class MasterNode(Node):
             lens.append(r.len)
             noise_lists[r.worker_id].append(r.noise_idx)
 
-
+        order = np.argsort(returns)
+        for i in range(self.exp_config.n_pop):
+            parent = np.random.choice(order[-self.exp_config.n_parents])
 
 
 
