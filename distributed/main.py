@@ -6,11 +6,11 @@ import hostlist
 logging.basicConfig(level=logging.DEBUG)
 log = logging.Logger("fake_cluster")
 
-from .dist import MasterClient, RelayClient, WorkerClient
+from .clients import MasterClient, RelayClient, WorkerClient
 
-from collections import namedtuple
 
-Task = namedtuple('Task', [])
+with open("configurations/cartpole.json", 'r') as f:
+    exp_config = json.loads(f.read())
 
 import time
 # Simulate server starts
@@ -71,26 +71,18 @@ class DistributedTF(object):
 
         # Load the experiment from file
 
-        # start the master server
-
 
         if self.node_id == 0:
-            log.info("Node {} defining task.".format(node_id))
-            master_client = MasterClient()
-            process_num = os.fork() # fork a new process
-            if process_num == 0:
-                relay_client = RelayClient()
-            else:
-                seed_lists = [[i] for i in range(len(self.node_list))]
-                for i in range(len(self.node_list)):
-                    master_redis.set('seed-lists-{}'.format(i), seed_lists)
+            # This node contains the master
+            node = MasterNode(exp_config)
 
 
-        # start the workers subscriptions
-        # Create a redis object for each
-        if self.node_id > 0:
-            log.info("Node {} joining server.".format(node_id))
-        worker_redis = redis.StrictRedis(host="localhost", port="6380")
+        else:
+            # start the workers subscriptions
+            # Create a redis object for each
+            if self.node_id > 0:
+                log.info("Node {} joining server.".format(node_id))
+            worker_redis = redis.StrictRedis(host="localhost", port="6380")
 
         p = master_redis.pubsub(ignore_subscribe_messages=True)
         p.subscribe(TASK_CHANNEL)
