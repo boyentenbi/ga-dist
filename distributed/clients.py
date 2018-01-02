@@ -71,11 +71,7 @@ class MasterClient:
         # Create the master data store
         self.master_redis = retry_connect(master_redis_cfg)
         logger.info('[master] connected to Redis: {}'.format(self.master_redis))
-        # noises that 'seeds' index into
-        self.noise = NoiseTable()
 
-        # Keep track of the number of generations
-        self.gen_counter = 0
 
     # Declare a generation
     def declare_gen(self, exp, gen_data):

@@ -8,6 +8,7 @@ log = logging.Logger()
 log = logging.getLogger(__name__)
 
 import time
+import numpy as np
 
 from collections import namedtuple
 
@@ -39,14 +40,29 @@ def setup(exp, single_threaded):
 
     return config, env, sess, policy
 
-
 def make_session(single_threaded):
     import tensorflow as tf
     if not single_threaded:
         return tf.InteractiveSession()
     return tf.InteractiveSession(config=tf.ConfigProto(inter_op_parallelism_threads=1, intra_op_parallelism_threads=1))
 
+class SharedNoiseTable(object):
+    def __init__(self, seed):
+        import ctypes, multiprocessing
 
+        count = 250000000  # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
+        log.info('Sampling {} random numbers with seed {}'.format(count, seed))
+        self._shared_mem = multiprocessing.Array(ctypes.c_float, count)
+        self.noise = np.ctypeslib.as_array(self._shared_mem.get_obj())
+        assert self.noise.dtype == np.float32
+        self.noise[:] = np.random.RandomState(seed).randn(count)  # 64-bit to 32-bit conversion here
+        log.info('Sampled {} bytes'.format(self.noise.size * 4))
+
+    def get(self, i, dim):
+        return self.noise[i:i + dim]
+
+    def sample_index(self, stream, dim):
+        return stream.randint(0, len(self.noise) - dim + 1)
 
 class WorkerProcess:
     """
@@ -83,28 +99,61 @@ class Node:
         # Set up the experiment
         self.exp_config = exp_config
         self.global_seed = self.exp_config.global_seed
-
+        self.min_steps = self.exp_config.min_steps
+        self.min_eps = self.exp_config.min_eps
+        # Initialise noise with the global seed which is shared between all nodes
+        self.noise = self.SharedNoiseTable(self.global_seed)
+        # Now a genome can be specified with a list of indices
+        # Sampling seeds and then using the first sample from resulting normal
+        # wouldn't necessarily give normally distributed samples!
 
         # Start worker processes
         for i in range(self.n_workers):
             wp = Process(target= lambda : WorkerProcess())
+
     def get_n_workers(self):
         raise NotImplementedError
 
 
 # The master node also works
 class MasterNode(Node):
-    def __init__(self, n_workers):
+    def __init__(self, n_workers, master_redis_cfg):
 
         # Initialize networking
         super().__init__(self, n_workers)
         log.info("Node {} contains the master client.".format(self.node_id))
-        self.master_client = MasterClient()
+        self.master_client = MasterClient(master_redis_cfg)
+        self.cluster_n_workers = self.exp_config.n_nodes*(self.n_workers+1)-1
 
-        # Start the workers
-        seed_lists = [[i] for i in range(len(self.node_list))]
-        for i in range(len(self.node_list)):
-            self.master_client.redis.set('seed-lists-{}'.format(i), seed_lists)
+        # Initialize the noise lists or 'genomes'
+        noise_lists = [[] for _ in range(self.cluster_n_workers)]
+
+        # TODO think about separate populations to increase CPU utilisation
+        #for i in range(len(self.node_list)):
+        #    self.master_client.redis.set('noise-lists-{}'.format(i), noise_lists)
+
+        # Iterate over generations
+        for gen_num in range(self.exp_config.n_gens):
+
+            workers_done = 0
+            results, returns, lens, worker_ids = [], [], [], []
+            while workers_done < n_workers:
+                worker_gen_num, result = self.master_client.pop_result()
+                assert worker_gen_num == gen_num
+                workers_done += 1
+
+
+        # Separate loop for when we change to node-failure-tolerant mode
+        for r in results:
+            noise_idxs.append(r.noise_idx)
+            returns.append(r.ret)
+            lens.append(r.len)
+            noise_lists[r.worker_id].append(r.noise_idx)
+
+
+
+
+
 
     def get_n_workers(self):
         if self.n_workers:
