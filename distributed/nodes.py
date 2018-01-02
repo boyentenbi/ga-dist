@@ -154,7 +154,6 @@ class MasterNode(Node):
 
 
 
-
     def get_n_workers(self):
         if self.n_workers:
             return self.n_workers
