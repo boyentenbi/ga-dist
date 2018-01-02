@@ -10,6 +10,7 @@ GEN_NUM_KEY = "ga:task_id"
 GEN_DATA_KEY = "ga:task_data"
 TASK_CHANNEL = 'ga:task_channel'
 RESULTS_KEY = 'ga:results'
+NOISES_KEY = 'ga:noises'
 
 
 def serialize(x):
@@ -17,7 +18,6 @@ def serialize(x):
 
 def deserialize(x):
     return pickle.loads(x)
-
 
 def retry_connect(redis_cfg, tries=300, base_delay=4.):
     """
@@ -126,6 +126,9 @@ class RelayClient:
         p.subscribe(**{TASK_CHANNEL: lambda msg: self._declare_gen_local(*deserialize(msg['data']))})
         p.run_in_thread(sleep_time=0.001)
 
+        # TODO should I be subscribing to new noise lists too?
+        # Probably not. The master client doesn't subscribe to the relay's results!
+
         while True:
             results = []
             start_time = curr_time = time.time()
@@ -162,6 +165,8 @@ class WorkerClient:
         return exp
 
     def get_current_gen(self):
+
+
         with self.local_redis.pipeline() as p:
             while True:
                 try:
@@ -180,12 +185,24 @@ class WorkerClient:
                             '[worker] Getting new gen {}. Cached gen was {}'.format(gen_num, self.cached_gen_num))
                         self.cached_gen_data = deserialize(p.execute())
                         self.cached_gen_num =  gen_num
+
+                        # Pop a noise list from the master queue
+                        # TODO is this right?
+                        # Check if we should be using 'b' in blpop
+                        # Do do need to lock the queue...
+                        # What is the [1] index for?
+                        self.noise_list = self.master_redis.blpop(RESULTS_KEY)[1]
+                        assert len(self.noise_list) == self.cached_gen_num # this is right, no off-by-one
                         break
                 except redis.WatchError:
                     # Just try again
                     continue
-        return self.cached_gen_num, self.cached_gen_data
+
+        return self.cached_gen_num, self.cached_gen_data, self.noise_list
 
     def push_result(self, gen_num, result):
         self.local_redis.rpush(RESULTS_KEY, serialize((gen_num, result)))
         logger.debug('[worker] Pushed result for task {}'.format(gen_num))
+
+    def pop_noise_list(self, gen_num):
+        gen_num, result = deserialize(self.master_redis.blpop(RESULTS_KEY)[1])

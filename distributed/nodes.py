@@ -1,7 +1,7 @@
 import logging
 import os
 from .clients import MasterClient, RelayClient, WorkerClient, \
-from .clients import EXP_KEY, GEN_DATA_KEY, GEN_NUM_KEY, TASK_CHANNEL, RESULTS_KEY
+from .clients import EXP_KEY, GEN_DATA_KEY, GEN_NUM_KEY, TASK_CHANNEL, RESULTS_KEY, NOISES_KEY
 from multiprocessing import Process
 import json
 log = logging.Logger()
@@ -93,7 +93,7 @@ class Node:
         relay_redis_cfg = {'unix_socket_path': relay_socket_path}
 
         # Relay client process
-        rcp = Process(target = lambda : RelayClient(master_redis_cfg, relay_redis_cfg).run())
+        rcp = Process(target = lambda : RelayClient(master_redis_cfg, relay_redis_cfg).run(), args = (,))
         rcp.start()
 
         # Set up the experiment
@@ -114,8 +114,7 @@ class Node:
     def get_n_workers(self):
         raise NotImplementedError
 
-
-# The master node also works
+# The master node also has worker processes
 class MasterNode(Node):
     def __init__(self, n_workers, master_redis_cfg):
 
@@ -136,7 +135,7 @@ class MasterNode(Node):
         for gen_num in range(self.exp_config.n_gens):
 
             workers_done = 0
-            results, returns, lens, worker_ids = [], [], [], []
+            results, returns, lens, worker_ids, noise_idxs = [], [], [], [], []
             while workers_done < n_workers:
                 worker_gen_num, result = self.master_client.pop_result()
                 assert worker_gen_num == gen_num
@@ -150,11 +149,15 @@ class MasterNode(Node):
             lens.append(r.len)
             noise_lists[r.worker_id].append(r.noise_idx)
 
+        # Order the returns and use it to choose parents
+        # Randomly sample parents n_pop times to form the new population
+        # Each new individual is encoded in its noise indices
         order = np.argsort(returns)
         for i in range(self.exp_config.n_pop):
-            parent = np.random.choice(order[-self.exp_config.n_parents])
+            parent_idx = np.random.choice(order[-self.exp_config.n_parents])
+            child_noise_list = noise_lists[parent_idx]
 
-
+            self.master_client.rpush(NOISES_KEY, child_noise_list) # TODO lpush or rpush? TODO is this the best way to transfer the noise lists?
 
     def get_n_workers(self):
         if self.n_workers:
