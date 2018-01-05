@@ -106,6 +106,26 @@ class Policy:
     def set_ob_stat(self, ob_mean, ob_std):
         raise NotImplementedError
 
+    # YOU NEED THE SHAPE TO DO THE GLOROT!
+    def glorot_flat_w_idxs(self, samples, std =1.):  # pylint: disable=W0613
+        inits = np.zeros([self.num_params])
+        i = 0
+        for v in self.trainable_variables:
+            shape =v.get_shape().as_list()
+            v_n_params = np.prod(shape)
+            if len(shape) != 1:
+                logger.info("trainable variable {} has shape {} and is being glorot initilalized".format(v, v.get_shape()))
+                samples_reshape = np.reshape(samples[i:i+v_n_params], shape)
+                out = samples_reshape * std / np.sqrt(np.square(samples_reshape).sum(axis=0, keepdims=True))
+                inits[i:i+v_n_params] = np.reshape(out, [v_n_params])
+            else:
+                # inits is already zero here
+                # the noise idxs passed over aren't used
+                pass
+            i += v_n_params
+        assert i  == self.num_params
+        return inits
+
 
 def bins(x, dim, num_bins, name):
     scores = U.dense(x, dim * num_bins, name, U.normc_initializer(0.01))
@@ -334,9 +354,7 @@ class DiscretePolicy(Policy):
         return a
 
     def act(self, ob, random_stream=None):
-        a = self._act(ob)
-        if random_stream is not None and self.ac_noise_std != 0:
-            a += random_stream.randn(*a.shape) * self.ac_noise_std
+        a = np.random.choice(range(self.ac_space.shape[0]), p= self._act(ob))
         return a
 
     @property
@@ -381,3 +399,5 @@ class DiscretePolicy(Policy):
 
         if ob_stat is not None:
             ob_stat.set_from_init(init_mean, init_std, init_count=1e5)
+
+    def initialize_from_seed(self):

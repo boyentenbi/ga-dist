@@ -14,21 +14,23 @@ import gym
 gym.undo_logger_setup()
 import policies, tf_util
 from collections import namedtuple
-
+import tf_util as U
 Task = namedtuple('Task', [])
 
 Config = namedtuple('Config', [
-    'global_seed', 'n_gens','l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
+    'global_seed', 'n_gens', 'n_nodes', 'init_timestep_limit','min_gen_time','l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
     'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
     'return_proc_mode', 'episode_cutoff_mode'
 ])
 
 Result = namedtuple('Result', [
     'worker_id',
-    'noise_inds_n', 'returns_n2', 'signreturns_n2', 'lengths_n2',
-    'eval_return', 'eval_length',
-    'ob_sum', 'ob_sumsq', 'ob_count'
+    'noise_idxs',
+    'eval_return',
+    'eval_length',
 ])
+
+Gen = namedtuple('Gen', ['noise_lists', 'timestep_limit'])
 
 def make_session(single_threaded):
     import tensorflow as tf
@@ -40,7 +42,7 @@ class SharedNoiseTable(object):
     def __init__(self, seed):
         import ctypes, multiprocessing
 
-        count = 250000000  # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
+        count = 250  # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
         log.info('Sampling {} random numbers with seed {}'.format(count, seed))
         self._shared_mem = multiprocessing.Array(ctypes.c_float, count)
         self.noise = np.ctypeslib.as_array(self._shared_mem.get_obj())
@@ -90,7 +92,7 @@ class Node:
 
         # Start worker processes
         for i in range(self.n_workers):
-           wp = Process(target= lambda : self.worker_process)
+           wp = Process(target= self.worker_process)
            wp.start()
 
     def get_n_workers(self):
@@ -108,16 +110,41 @@ class Node:
                               env.action_space,
                               **self.exp['policy']['args'])
         tf_util.initialize()
+        rs = np.random.RandomState()
+        worker_id = rs.randint(2 ** 31)
 
+        # Keep iterating through generations infinitely?
         while True:
+            # Grab generation data
             gen_num, gen_data = wc.get_current_gen()
+            assert isinstance(gen_num, int) and isinstance(gen_data, Gen)
             gen_tstart = time.time()
-            eval_return, eval_length = policy.rollout(env)
-            log.info('Eval result: gen={} return={:.3f} length={}'.format(gen_num, eval_return, eval_length))
 
-            wc.push_result(gen_num, Result(gen_num, gen_data))
+            # Prep for rollouts
+            noise_sublists, returns, lengths = [], [], []
+            while not noise_sublists or time.time() - gen_tstart < self.config.min_gen_time:
+                # Sample a noise list
+                noise_list = rs.choice(gen_data.noise_lists)
+                # Use the first index to initialize using glorot
+                init_params = policy.glorot_flat_w_idxs(self.noise.get(noise_list[0]), std=1.)
 
+                # Use the remaining indices and one new index to mutate
+                new_noise_idx = self.noise.sample_index(rs, policy.num_params)
+                v = init_params
+                for j in noise_list[1:]+[new_noise_idx]:
+                    v += self.config.noise_stdev * self.noise.get(j, policy.num_params)
 
+                policy.set_trainable_flat(v)
+                rews_pos, len_pos = policy.rollout(env)
+
+                # policy.set_trainable_flat(task_data.params - v)
+                # rews_neg, len_neg = rollout_and_update_ob_stat(
+                #     policy, env, task_data.timestep_limit, rs, task_ob_stat, config.calc_obstat_prob)
+
+                eval_return, eval_length = policy.rollout(env)
+                duration = time.time() - gen_tstart
+                log.info('Eval result: gen={} return={:.3f} length={} time = {}'.format(gen_num, eval_return, eval_length, duration))
+                wc.push_result(gen_num, Result(worker_id, noise_list, eval_return, eval_length))
 
 # The master node also has worker processes
 class MasterNode(Node):
@@ -129,7 +156,7 @@ class MasterNode(Node):
                          master_host, master_port, master_socket_path)
         log.info("Node {} contains the master client.".format(self.node_id))
         self.master_client = MasterClient(self.master_redis_cfg)
-        #self.cluster_n_workers = self.exp.n_nodes*(self.n_workers+1)-1
+        self.cluster_n_workers = self.config.n_nodes*(self.n_workers+1)-1
 
         # TODO think about separate populations to increase CPU utilisation
         #for i in range(len(self.node_list)):
@@ -139,34 +166,34 @@ class MasterNode(Node):
 
         self.noise_lists = []
         self.master_client.declare_experiment(self.exp)
+        self.master_client.declare_gen(Gen(noise_lists = [[]],
+                                           timestep_limit=self.config.init_timestep_limit))
 
         # Iterate over generations
         for gen_num in range(self.config.n_gens):
-
+            # We don't
             workers_done = 0
-            results, returns, lens, worker_ids, noise_idxs = [], [], [], [], []
-            while workers_done < n_workers:
+            results, returns, lens, worker_ids, noise_lists = [], [], [], [], []
+            while workers_done < self.cluster_n_workers:
                 worker_gen_num, result = self.master_client.pop_result()
                 assert worker_gen_num == gen_num
                 workers_done += 1
 
+            # Separate loop for when we change to node-failure-tolerant mode
+            for r in results:
+                noise_lists.append(r.noise_list)
+                returns.append(r.ret)
+                lens.append(r.len)
 
-        # Separate loop for when we change to node-failure-tolerant mode
-        for r in results:
-            noise_idxs.append(r.noise_idx)
-            returns.append(r.ret)
-            lens.append(r.len)
-            noise_lists[r.worker_id].append(r.noise_idx)
+            # Order the returns and use it to choose parents
+            # Randomly sample parents n_pop times to form the new population
+            # Each new individual is encoded in its noise indices
+            order = np.argsort(returns)
+            for i in range(self.exp_config.n_pop):
+                parent_idx = np.random.choice(order[-self.exp_config.n_parents])
+                child_noise_list = noise_lists[parent_idx]
 
-        # Order the returns and use it to choose parents
-        # Randomly sample parents n_pop times to form the new population
-        # Each new individual is encoded in its noise indices
-        order = np.argsort(returns)
-        for i in range(self.exp_config.n_pop):
-            parent_idx = np.random.choice(order[-self.exp_config.n_parents])
-            child_noise_list = noise_lists[parent_idx]
-
-            self.master_client.rpush(NOISES_KEY, child_noise_list) # TODO lpush or rpush? TODO is this the best way to transfer the noise lists?
+                self.master_client.rpush(NOISES_KEY, child_noise_list) # TODO lpush or rpush? TODO is this the best way to transfer the noise lists?
 
     def get_n_workers(self):
         if self.n_workers:

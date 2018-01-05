@@ -2,6 +2,9 @@
   "config": {
     "global_seed": 123,
     "n_gens": 100,
+    "n_nodes": 1,
+    "init_timestep_limit":1000,
+    "min_gen_time":0.2,
     "calc_obstat_prob": 0.01,
     "episodes_per_batch": 10000,
     "eval_prob": 0.003,
@@ -26,8 +29,8 @@
       "ac_noise_std": 0.01,
       "connection_type": "dense_skip",
       "hidden_dims": [
-        256,
-        256
+        16,
+        16
       ],
       "nonlin_type": "tanh"
     },

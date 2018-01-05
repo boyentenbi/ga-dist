@@ -11,7 +11,7 @@ GEN_NUM_KEY = "ga:task_id"
 GEN_DATA_KEY = "ga:task_data"
 TASK_CHANNEL = 'ga:task_channel'
 RESULTS_KEY = 'ga:results'
-NOISES_KEY = 'ga:noises'
+#NOISES_KEY = 'ga:noises'
 
 
 def serialize(x):
@@ -72,13 +72,13 @@ class MasterClient:
         # Create the master data store
         self.master_redis = retry_connect(master_redis_cfg)
         logger.info('[master] connected to Redis: {}'.format(self.master_redis))
-
+        self.gen_counter = 0
     def declare_experiment(self, exp):
         self.master_redis.set(EXP_KEY, exp)
         logger.info('[master] Declared experiment {}'.format(pformat(exp)))
 
     # Declare a generation
-    def declare_gen(self, exp, gen_data):
+    def declare_gen(self, gen_data):
 
         gen_num = self.gen_counter
         self.gen_counter += 1
@@ -151,6 +151,9 @@ class RelayClient:
         logger.info('[relay] Received task {}'.format(gen_num))
         self.local_redis.mset({GEN_NUM_KEY: gen_num, GEN_DATA_KEY: gen_data})
 
+    # def relay_noise_lists(self):
+    #     self.master_redis.
+
 class WorkerClient:
 
     """
@@ -187,7 +190,8 @@ class WorkerClient:
                         p.get(GEN_DATA_KEY)
                         logger.info(
                             '[worker] Getting new gen {}. Cached gen was {}'.format(gen_num, self.cached_gen_num))
-                        self.cached_gen_data = deserialize(p.execute())
+                        gen_data = p.execute()[0]
+                        self.cached_gen_data = deserialize(gen_data)
                         self.cached_gen_num =  gen_num
 
                         # Pop a noise list from the master queue
@@ -195,7 +199,8 @@ class WorkerClient:
                         # Check if we should be using 'b' in blpop
                         # Do do need to lock the queue...
                         # What is the [1] index for?
-                        self.noise_list = self.master_redis.blpop(RESULTS_KEY)[1]
+                        gen_num_noise, self.noise_list = self.pop_noise_list()
+                        assert gen_num_noise == gen_num
                         assert len(self.noise_list) == self.cached_gen_num # this is right, no off-by-one
                         break
                 except redis.WatchError:
@@ -208,5 +213,6 @@ class WorkerClient:
         self.local_redis.rpush(RESULTS_KEY, serialize((gen_num, result)))
         logger.debug('[worker] Pushed result for task {}'.format(gen_num))
 
-    def pop_noise_list(self, gen_num):
-        gen_num, result = deserialize(self.master_redis.blpop(RESULTS_KEY)[1])
+    # def pop_noise_list(self):
+    #     gen_num, noise_list = deserialize(self.master_redis.blpop(NOISES_KEY)[1])
+    #     return gen_num, noise_list
