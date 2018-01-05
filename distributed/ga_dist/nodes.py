@@ -1,21 +1,24 @@
 import logging
 import os
-from .clients import MasterClient, RelayClient, WorkerClient, \
-from .clients import EXP_KEY, GEN_DATA_KEY, GEN_NUM_KEY, TASK_CHANNEL, RESULTS_KEY, NOISES_KEY
+from clients import MasterClient, RelayClient, WorkerClient
+from clients import EXP_KEY, GEN_DATA_KEY, GEN_NUM_KEY, TASK_CHANNEL, RESULTS_KEY, NOISES_KEY
 from multiprocessing import Process
 import json
-log = logging.Logger()
 log = logging.getLogger(__name__)
 
 import time
 import numpy as np
 
+import gym
+
+gym.undo_logger_setup()
+import policies, tf_util
 from collections import namedtuple
 
 Task = namedtuple('Task', [])
 
 Config = namedtuple('Config', [
-    'l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
+    'global_seed', 'n_gens','l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
     'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
     'return_proc_mode', 'episode_cutoff_mode'
 ])
@@ -26,19 +29,6 @@ Result = namedtuple('Result', [
     'eval_return', 'eval_length',
     'ob_sum', 'ob_sumsq', 'ob_count'
 ])
-
-def setup(exp, single_threaded):
-    import gym
-    gym.undo_logger_setup()
-    from . import policies, tf_util
-
-    config = Config(**exp['config'])
-    env = gym.make(exp['env_id'])
-    sess = make_session(single_threaded=single_threaded)
-    policy = getattr(policies, exp['policy']['type'])(env.observation_space, env.action_space, **exp['policy']['args'])
-    tf_util.initialize()
-
-    return config, env, sess, policy
 
 def make_session(single_threaded):
     import tensorflow as tf
@@ -64,14 +54,60 @@ class SharedNoiseTable(object):
     def sample_index(self, stream, dim):
         return stream.randint(0, len(self.noise) - dim + 1)
 
-class WorkerProcess:
-    """
-    Sets up both the worker client and evaluation thread
-    Runs both concurrently
-    """
-    def __init__(self, relay_redis_cfg, exp_config):
-        wc = WorkerClient(relay_redis_cfg=)
-        config, env, sess, policy = setup(exp_config, single_threaded=True)
+
+class Node:
+    def __init__(self, node_id, n_workers, exp,
+                 master_host, master_port, socket_path):
+
+        # Initialize networking
+        self.master_port = master_port
+        self.node_id = node_id
+        if n_workers:
+            assert n_workers < os.cpu_count()
+        self.n_workers = None
+        self.n_workers = n_workers if n_workers else self.get_n_workers()
+        self.socket_path = socket_path
+        self.relay_redis_cfg = {'unix_socket_path': socket_path, 'db': 1}
+        self.master_redis_cfg = self.get_master_redis_cfg()
+        self.master_host = master_host
+        self.exp = exp
+
+        # Relay client process
+        rcp = Process(target = RelayClient(self.master_redis_cfg,
+                                           self.relay_redis_cfg).run)
+        rcp.start()
+
+
+        # Initialize the experiments
+        self.config = Config(**self.exp['config'])
+        self.global_seed = self.config.global_seed
+        #self.min_steps = self.config.min_steps
+        #self.min_eps = self.config.min_eps
+        self.noise = SharedNoiseTable(self.global_seed)
+        # Now a genome can be specified with a list of indices
+        # Sampling seeds and then using the first sample from resulting normal
+        # wouldn't necessarily give normally distributed samples!
+
+        # Start worker processes
+        for i in range(self.n_workers):
+           wp = Process(target= lambda : self.worker_process)
+           wp.start()
+
+    def get_n_workers(self):
+        raise NotImplementedError
+    def get_master_redis_cfg(self):
+        raise NotImplementedError
+
+    def worker_process(self):
+        wc = WorkerClient(relay_redis_cfg=self.relay_redis_cfg)
+        # Set up the experiment
+        env = gym.make(self.exp['env_id'])
+        sess = make_session(single_threaded=True)
+        policy_class = getattr(policies, self.exp['policy']['type'])
+        policy = policy_class(env.observation_space,
+                              env.action_space,
+                              **self.exp['policy']['args'])
+        tf_util.initialize()
 
         while True:
             gen_num, gen_data = wc.get_current_gen()
@@ -81,58 +117,31 @@ class WorkerProcess:
 
             wc.push_result(gen_num, Result(gen_num, gen_data))
 
-class Node:
-    def __init__(self, node_id, n_workers, exp_config):
 
-        # Initialize networking
-        self.node_id = node_id
-        assert n_workers <= os.cpu_count()
-        self.n_workers = n_workers if n_workers else self.get_n_workers()
-
-        master_redis_cfg = {'host': master_host, 'port': master_port}
-        relay_redis_cfg = {'unix_socket_path': relay_socket_path}
-
-        # Relay client process
-        rcp = Process(target = lambda : RelayClient(master_redis_cfg, relay_redis_cfg).run(), args = (,))
-        rcp.start()
-
-        # Set up the experiment
-        self.exp_config = exp_config
-        self.global_seed = self.exp_config.global_seed
-        self.min_steps = self.exp_config.min_steps
-        self.min_eps = self.exp_config.min_eps
-        # Initialise noise with the global seed which is shared between all nodes
-        self.noise = self.SharedNoiseTable(self.global_seed)
-        # Now a genome can be specified with a list of indices
-        # Sampling seeds and then using the first sample from resulting normal
-        # wouldn't necessarily give normally distributed samples!
-
-        # Start worker processes
-        for i in range(self.n_workers):
-            wp = Process(target= lambda : WorkerProcess())
-
-    def get_n_workers(self):
-        raise NotImplementedError
 
 # The master node also has worker processes
 class MasterNode(Node):
-    def __init__(self, n_workers, master_redis_cfg):
+    def __init__(self, node_id, n_workers, exp,
+                 master_host, master_port, master_socket_path):
 
         # Initialize networking
-        super().__init__(self, n_workers)
+        super().__init__(node_id, n_workers, exp,
+                         master_host, master_port, master_socket_path)
         log.info("Node {} contains the master client.".format(self.node_id))
-        self.master_client = MasterClient(master_redis_cfg)
-        self.cluster_n_workers = self.exp_config.n_nodes*(self.n_workers+1)-1
-
-        # Initialize the noise lists or 'genomes'
-        noise_lists = [[] for _ in range(self.cluster_n_workers)]
+        self.master_client = MasterClient(self.master_redis_cfg)
+        #self.cluster_n_workers = self.exp.n_nodes*(self.n_workers+1)-1
 
         # TODO think about separate populations to increase CPU utilisation
         #for i in range(len(self.node_list)):
         #    self.master_client.redis.set('noise-lists-{}'.format(i), noise_lists)
 
+    def begin_exp(self):
+
+        self.noise_lists = []
+        self.master_client.declare_experiment(self.exp)
+
         # Iterate over generations
-        for gen_num in range(self.exp_config.n_gens):
+        for gen_num in range(self.config.n_gens):
 
             workers_done = 0
             results, returns, lens, worker_ids, noise_idxs = [], [], [], [], []
@@ -165,9 +174,15 @@ class MasterNode(Node):
         else:
             return os.cpu_count() - 2
 
+    def get_master_redis_cfg(self):
+        return {'unix_socket_path': self.socket_path, 'db': 0}
+
+
 class WorkerNode(Node):
-    def __init__(self, n_workers):
-        super().__init__(self, n_workers)
+    def __init__(self, node_id, n_workers, exp,
+                 master_host, master_port, socket_path):
+        super().__init__(node_id, n_workers, exp,
+                         master_host, master_port, socket_path)
 
         log.info("Node {} is a worker node".format(self.node_id))
         assert n_workers <= os.cpu_count()
@@ -178,4 +193,7 @@ class WorkerNode(Node):
             return self.n_workers
         else:
             return os.cpu_count() - 1
+
+    def get_master_redis_cfg(self):
+        return {'host': self.master_host, 'port': self.master_port, 'db':0}
 

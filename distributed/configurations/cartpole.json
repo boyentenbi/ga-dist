@@ -1,6 +1,7 @@
 {
   "config": {
-    "seed": 123,
+    "global_seed": 123,
+    "n_gens": 100,
     "calc_obstat_prob": 0.01,
     "episodes_per_batch": 10000,
     "eval_prob": 0.003,
@@ -11,7 +12,7 @@
     "return_proc_mode": "centered_rank",
     "episode_cutoff_mode": "env_default"
   },
-  "env_id": "Humanoid-v1",
+  "env_id": "CartPole-v0",
   "exp_prefix": "humanoid",
   "optimizer": {
     "args": {
@@ -23,13 +24,13 @@
     "args": {
       "ac_bins": "continuous:",
       "ac_noise_std": 0.01,
-      "connection_type": "ff",
+      "connection_type": "dense_skip",
       "hidden_dims": [
         256,
         256
       ],
       "nonlin_type": "tanh"
     },
-    "type": "MujocoPolicy"
+    "type": "DiscretePolicy"
   }
 }

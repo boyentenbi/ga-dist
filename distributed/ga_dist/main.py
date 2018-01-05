@@ -3,12 +3,11 @@ import redis
 import logging
 import os
 import hostlist
+from nodes import MasterNode, WorkerNode
+from clients import MasterClient, RelayClient, WorkerClient
+
 logging.basicConfig(level=logging.DEBUG)
 log = logging.Logger("fake_cluster")
-from .nodes import MasterNode, WorkerNode
-from .clients import MasterClient, RelayClient, WorkerClient
-
-
 with open("configurations/cartpole.json", 'r') as f:
     exp_config = json.loads(f.read())
 
@@ -40,15 +39,11 @@ class DistributedTF(object):
         print(self.node_list)
         self.num_tasks = len(self.node_list)  # int(os.environ["SLURM_NTASKS"])
         # assert int(self.nawum_tasks) == len(self.node_list), "currently only setup for one task per node"
-        #self.node_id = self.node_list.index(self.node_name)
 
         log.info("node name: {}, assigned id: {}, num tasks: {} \n node list: {}".format(
             self.node_name, self.node_id, self.num_tasks, self.node_list
         ))
         self.num_nodes = len(self.node_list)
-
-    # def _parse_node_list(self, node_list):
-    #     return hostlist.expand_hostlist(node_list)
 
     def main(self):
 
@@ -57,17 +52,25 @@ class DistributedTF(object):
 
         if self.node_id == 0:
             # This node contains the master
-            node = MasterNode(exp_config)
+            master_node = MasterNode(
+                self.node_id,
+                None,
+                exp_config,
+                master_host='localhost',
+                master_port=6379,
+                master_socket_path='/var/run/redis/redis.sock')
 
+            master_node.begin_exp()
         else:
             # start the workers subscriptions
-            node = WorkerNode(exp_config)
+            node = WorkerNode(self.node_id, None, exp_config,
+                 master_host='localhost', master_port=6379, master_socket_path='/var/run/redis/redis.sock')
             log.info("Node {} joining server.".format(self.node_id))
 
 # Test with only the node containing the master client
 N_SIM_WORKERS = 0
 
-dtf = DistributedTF(0, node_id = 1)
+dtf = DistributedTF(0, node_id = 0)
 dtf.main()
 print("done!")
 

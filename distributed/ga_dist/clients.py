@@ -3,6 +3,7 @@ import logging
 import redis
 import time
 import os
+from pprint import pformat
 logger  = logging.getLogger(__name__) # TODO what is __name__ ?
 
 EXP_KEY = "ga:exp"
@@ -67,11 +68,14 @@ class MasterClient:
     One master process in the entire cluster
     """
 
-    def __init(self, master_redis_cfg):
+    def __init__(self, master_redis_cfg):
         # Create the master data store
         self.master_redis = retry_connect(master_redis_cfg)
         logger.info('[master] connected to Redis: {}'.format(self.master_redis))
 
+    def declare_experiment(self, exp):
+        self.master_redis.set(EXP_KEY, exp)
+        logger.info('[master] Declared experiment {}'.format(pformat(exp)))
 
     # Declare a generation
     def declare_gen(self, exp, gen_data):
