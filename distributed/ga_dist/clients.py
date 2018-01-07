@@ -5,7 +5,7 @@ import time
 import os
 from pprint import pformat
 logger  = logging.getLogger(__name__) # TODO what is __name__ ?
-
+import sys
 EXP_KEY = "ga:exp"
 GEN_NUM_KEY = "ga:task_id"
 GEN_DATA_KEY = "ga:task_data"
@@ -85,12 +85,14 @@ class MasterClient:
 
         # Serialize the data, ready to send
         gd = serialize(gen_data)
+        to_publish = serialize((gen_num, gd))
+        logger.info("Declaring generation {}. serialized has size {}".format(gen_num, sys.getsizeof(to_publish)))
 
         # Create the pipe and send both items at once
         p = self.master_redis.pipeline()
         p.mset({GEN_NUM_KEY: gen_num,
                 GEN_DATA_KEY:gd})
-        p.publish(TASK_CHANNEL, serialize((gen_num, gd))) # TODO serialized serialized?
+        p.publish(TASK_CHANNEL, to_publish) # TODO serialized serialized?
         p.execute()
         logger.debug('[master] declared generation {}'.format(gen_num))
         return gen_num
@@ -113,6 +115,7 @@ class RelayClient:
     def __init__(self, master_redis_cfg, relay_redis_cfg):
         # Connect to the existing master redis
         self.master_redis = retry_connect(master_redis_cfg)
+        self.master_redis.flushall()
         logger.info('[relay] Connected to master: {}'.format(self.master_redis))
         # Create the relay redis
         self.local_redis = retry_connect(relay_redis_cfg)
@@ -129,9 +132,6 @@ class RelayClient:
         p = self.master_redis.pubsub(ignore_subscribe_messages=True)
         p.subscribe(**{TASK_CHANNEL: lambda msg: self._declare_gen_local(*deserialize(msg['data']))})
         p.run_in_thread(sleep_time=0.001)
-
-        # TODO should I be subscribing to new noise lists too?
-        # Probably not. The master client doesn't subscribe to the relay's results!
 
         while True:
             results = []
@@ -179,7 +179,7 @@ class WorkerClient:
                 try:
                     # Look for a new gen
                     p.watch(GEN_NUM_KEY)
-                    gen_num = retry_get(p, GEN_NUM_KEY)
+                    gen_num = int(retry_get(p, GEN_NUM_KEY))
                     if gen_num == self.cached_gen_num:
                         logger.debug('[worker] Returning cached gen_num {}'.format(gen_num))
                         break
@@ -194,20 +194,12 @@ class WorkerClient:
                         self.cached_gen_data = deserialize(gen_data)
                         self.cached_gen_num =  gen_num
 
-                        # Pop a noise list from the master queue
-                        # TODO is this right?
-                        # Check if we should be using 'b' in blpop
-                        # Do do need to lock the queue...
-                        # What is the [1] index for?
-                        gen_num_noise, self.noise_list = self.pop_noise_list()
-                        assert gen_num_noise == gen_num
-                        assert len(self.noise_list) == self.cached_gen_num # this is right, no off-by-one
                         break
                 except redis.WatchError:
                     # Just try again
                     continue
 
-        return self.cached_gen_num, self.cached_gen_data, self.noise_list
+        return self.cached_gen_num, self.cached_gen_data
 
     def push_result(self, gen_num, result):
         self.local_redis.rpush(RESULTS_KEY, serialize((gen_num, result)))

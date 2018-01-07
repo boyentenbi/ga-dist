@@ -1,11 +1,10 @@
 import logging
 import os
 from clients import MasterClient, RelayClient, WorkerClient
-from clients import EXP_KEY, GEN_DATA_KEY, GEN_NUM_KEY, TASK_CHANNEL, RESULTS_KEY, NOISES_KEY
+from clients import EXP_KEY, GEN_DATA_KEY, GEN_NUM_KEY, TASK_CHANNEL, RESULTS_KEY
 from multiprocessing import Process
 import json
-log = logging.getLogger(__name__)
-
+from queue import PriorityQueue
 import time
 import numpy as np
 
@@ -18,20 +17,25 @@ import tf_util as U
 Task = namedtuple('Task', [])
 
 Config = namedtuple('Config', [
-    'global_seed', 'n_gens', 'n_nodes', 'init_timestep_limit','min_gen_time','l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
+    'global_seed', 'n_gens', 'n_nodes', 'init_tstep_limit','min_gen_time',
+    'l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
     'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
-    'return_proc_mode', 'episode_cutoff_mode'
+    'return_proc_mode', 'episode_cutoff_mode', "adaptive_tstep_lim", 'tstep_lim_incr_ratio',
+    'n_pop', 'tstep_maxing_thresh',
 ])
 
 Result = namedtuple('Result', [
     'worker_id',
-    'noise_idxs',
-    'eval_return',
-    'eval_length',
+    'noise_list',
+    'ret',
+    'len',
+    'time'
 ])
 
 Gen = namedtuple('Gen', ['noise_lists', 'timestep_limit'])
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 def make_session(single_threaded):
     import tensorflow as tf
     if not single_threaded:
@@ -42,13 +46,13 @@ class SharedNoiseTable(object):
     def __init__(self, seed):
         import ctypes, multiprocessing
 
-        count = 250  # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
-        log.info('Sampling {} random numbers with seed {}'.format(count, seed))
+        count = 25*10**7  # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
+        logger.info('Sampling {} random numbers with seed {}'.format(count, seed))
         self._shared_mem = multiprocessing.Array(ctypes.c_float, count)
         self.noise = np.ctypeslib.as_array(self._shared_mem.get_obj())
         assert self.noise.dtype == np.float32
         self.noise[:] = np.random.RandomState(seed).randn(count)  # 64-bit to 32-bit conversion here
-        log.info('Sampled {} bytes'.format(self.noise.size * 4))
+        logger.info('Sampled {} bytes'.format(self.noise.size * 4))
 
     def get(self, i, dim):
         return self.noise[i:i + dim]
@@ -118,33 +122,43 @@ class Node:
             # Grab generation data
             gen_num, gen_data = wc.get_current_gen()
             assert isinstance(gen_num, int) and isinstance(gen_data, Gen)
-            gen_tstart = time.time()
+            ep_tstart = time.time()
 
             # Prep for rollouts
             noise_sublists, returns, lengths = [], [], []
-            while not noise_sublists or time.time() - gen_tstart < self.config.min_gen_time:
-                # Sample a noise list
-                noise_list = rs.choice(gen_data.noise_lists)
-                # Use the first index to initialize using glorot
-                init_params = policy.glorot_flat_w_idxs(self.noise.get(noise_list[0]), std=1.)
+            while not noise_sublists or time.time() - ep_tstart < self.config.min_gen_time:
 
-                # Use the remaining indices and one new index to mutate
-                new_noise_idx = self.noise.sample_index(rs, policy.num_params)
-                v = init_params
-                for j in noise_list[1:]+[new_noise_idx]:
-                    v += self.config.noise_stdev * self.noise.get(j, policy.num_params)
+                if len(gen_data.noise_lists) == 0 :
+
+                    # Create a list with a single randomly draw index
+                    noise_list = [self.noise.sample_index(rs, policy.num_params)]
+                    # Use the first index to initialize using glorot
+                    v = policy.glorot_flat_w_idxs(
+                        self.noise.get(noise_list[0], policy.num_params), std=1.)
+                else:
+                    # Sample a noise list from the broadcast ones
+                    noise_list = gen_data.noise_lists[rs.choice(len(gen_data.noise_lists))]
+
+                    # Use the first index to initialize using glorot
+                    init_params = policy.glorot_flat_w_idxs(self.noise.get(noise_list[0]), std=1.)
+
+                    # Use the remaining indices and one new index to mutate
+                    new_noise_idx = self.noise.sample_index(rs, policy.num_params)
+                    v = init_params
+                    for j in noise_list[1:] + [new_noise_idx]:
+                        v += self.config.noise_stdev * self.noise.get(j, policy.num_params)
 
                 policy.set_trainable_flat(v)
-                rews_pos, len_pos = policy.rollout(env)
+                rewards, length = policy.rollout(env)
 
                 # policy.set_trainable_flat(task_data.params - v)
                 # rews_neg, len_neg = rollout_and_update_ob_stat(
                 #     policy, env, task_data.timestep_limit, rs, task_ob_stat, config.calc_obstat_prob)
-
-                eval_return, eval_length = policy.rollout(env)
-                duration = time.time() - gen_tstart
-                log.info('Eval result: gen={} return={:.3f} length={} time = {}'.format(gen_num, eval_return, eval_length, duration))
-                wc.push_result(gen_num, Result(worker_id, noise_list, eval_return, eval_length))
+                eval_ret = np.sum(rewards)
+                duration = time.time() - ep_tstart
+                logger.info('Eval result: gen={} return={:.3f} length={} time = {}'.format(
+                    gen_num, eval_ret, length, duration))
+                wc.push_result(gen_num, Result(worker_id, noise_list, eval_ret, length, duration))
 
 # The master node also has worker processes
 class MasterNode(Node):
@@ -154,7 +168,7 @@ class MasterNode(Node):
         # Initialize networking
         super().__init__(node_id, n_workers, exp,
                          master_host, master_port, master_socket_path)
-        log.info("Node {} contains the master client.".format(self.node_id))
+        logger.info("Node {} contains the master client.".format(self.node_id))
         self.master_client = MasterClient(self.master_redis_cfg)
         self.cluster_n_workers = self.config.n_nodes*(self.n_workers+1)-1
 
@@ -162,38 +176,123 @@ class MasterNode(Node):
         #for i in range(len(self.node_list)):
         #    self.master_client.redis.set('noise-lists-{}'.format(i), noise_lists)
 
-    def begin_exp(self):
+    def begin_exp(self, log_dir):
 
-        self.noise_lists = []
+        exp_tstart = time.time()
+        noise_lists = []
         self.master_client.declare_experiment(self.exp)
-        self.master_client.declare_gen(Gen(noise_lists = [[]],
-                                           timestep_limit=self.config.init_timestep_limit))
+        import tabular_logger as tlogger
+        logger.info('Tabular logging to {}'.format(log_dir))
+        tlogger.start(log_dir)
 
+        tstep_lim = self.config.init_tstep_limit
+        n_exp_eps, n_exp_steps = 0, 0
+
+        env = gym.make(self.exp['env_id'])
+        sess = make_session(single_threaded=True)
+        policy_class = getattr(policies, self.exp['policy']['type'])
+        policy = policy_class(env.observation_space,
+                              env.action_space,
+                              **self.exp['policy']['args'])
+        tf_util.initialize()
         # Iterate over generations
         for gen_num in range(self.config.n_gens):
-            # We don't
-            workers_done = 0
-            results, returns, lens, worker_ids, noise_lists = [], [], [], [], []
-            while workers_done < self.cluster_n_workers:
-                worker_gen_num, result = self.master_client.pop_result()
-                assert worker_gen_num == gen_num
-                workers_done += 1
 
-            # Separate loop for when we change to node-failure-tolerant mode
-            for r in results:
-                noise_lists.append(r.noise_list)
-                returns.append(r.ret)
-                lens.append(r.len)
+            # Declare the gen
+            self.master_client.declare_gen(
+                Gen(noise_lists=noise_lists,
+                    timestep_limit=self.config.init_tstep_limit))
+            gen_tstart = time.time()
+            # Prep for new gen results
+            n_gen_eps, n_gen_steps, \
+            n_bad_eps, n_bad_steps, bad_time  = 0, 0, 0, 0, 0
+            results, returns, lens, noise_lists = [], [], [], []
+            worker_eps = {}
+            # Keep collecting results until we reach BOTH thresholds
+            while n_gen_eps < self.config.episodes_per_batch or \
+                    n_gen_steps < self.config.timesteps_per_batch:
+                # Pop a result, accumulate if current gen, throw if past gen
+                worker_gen_num, r = self.master_client.pop_result()
+                if worker_gen_num == gen_num:
+                    worker_id = r.worker_id
+                    if worker_id in worker_eps:
+                        worker_eps[worker_id] += 1
+                    else:
+                        worker_eps[worker_id] = 1
+                    n_gen_eps += 1
+                    n_gen_steps += r.len
+                    noise_lists.append(r.noise_list)
+                    returns.append(r.ret)
+                    lens.append(r.len)
+                    n_exp_eps +=1
+                    n_exp_steps += 1
+                else:
+                    n_bad_eps += 1
+                    n_bad_steps += r.len
+                    bad_time += r.time
+
+            # All other nodes are now wasting compute for master from here!
+
+            # Determine if the timestep limit needs to be increased
+
+            # Update number of steps to take
+            if self.config.adaptive_tstep_lim and \
+                    np.mean(lens==tstep_lim) > self.config.tstep_maxing_thresh:
+                old_tslimit = tslimit
+                tslimit = int(self.config.tstep_lim_incr_ratio * tslimit)
+                logger.info('Increased timestep limit from {} to {}'.format(old_tslimit, tslimit))
 
             # Order the returns and use it to choose parents
-            # Randomly sample parents n_pop times to form the new population
-            # Each new individual is encoded in its noise indices
-            order = np.argsort(returns)
-            for i in range(self.exp_config.n_pop):
-                parent_idx = np.random.choice(order[-self.exp_config.n_parents])
-                child_noise_list = noise_lists[parent_idx]
+            # Random sampling is done in worker processes
+            # set the noise list ready for next iter
+            order = sorted(range(n_gen_eps), key = lambda x: returns[x])
+            parent_idxs = order[-self.config.n_pop:]
+            noise_lists = [noise_lists[parent_idx] for parent_idx in parent_idxs]
 
-                self.master_client.rpush(NOISES_KEY, child_noise_list) # TODO lpush or rpush? TODO is this the best way to transfer the noise lists?
+            # Compute the skip fraction
+            skip_frac = n_bad_eps / n_gen_eps
+            if skip_frac > 0:
+                logger.warning('Skipped {} out of date results ({:.2f}%)'.format(
+                    n_bad_eps, 100. * skip_frac))
+
+            # stop the clock
+            gen_tend = time.time()
+
+            # Reward distribution
+            tlogger.record_tabular("EpRetMed", np.nan if not returns else np.median(returns))
+            tlogger.record_tabular("EpRetMax", np.nan if not returns else np.max(returns))
+            tlogger.record_tabular("EpRetMin", np.nan if not returns else np.min(returns))
+            tlogger.record_tabular("EpRetUQ", np.nan if not returns else np.percentile(returns, 0.75))
+            tlogger.record_tabular("EpRetLQ", np.nan if not returns else np.percentile(returns, 0.25))
+
+            tlogger.record_tabular("EpLenMed", np.nan if not lens else np.median(lens))
+            tlogger.record_tabular("EpLenMax", np.nan if not lens else np.max(lens))
+            tlogger.record_tabular("EpLenMin", np.nan if not lens else np.min(lens))
+            tlogger.record_tabular("EpLenUQ", np.nan if not lens else np.percentile(lens, 0.75))
+            tlogger.record_tabular("EpLenLQ", np.nan if not lens else np.percentile(lens, 0.25))
+
+            # tlogger.record_tabular("EvalPopRank", np.nan if not returns else (
+            #         np.searchsorted(np.sort(returns_n2.ravel()), returns).mean() / returns_n2.size))
+            tlogger.record_tabular("EpCount", n_gen_eps)
+
+
+
+            #tlogger.record_tabular("Norm", float(np.square(policy.get_trainable_flat()).sum()))
+
+            #tlogger.record_tabular("EpisodesThisIter", n_gen_eps)
+            tlogger.record_tabular("EpisodesSoFar", n_exp_eps)
+            tlogger.record_tabular("TimestepsThisIter", n_gen_steps)
+            tlogger.record_tabular("TimestepsSoFar", n_exp_steps)
+
+            num_unique_workers = len(worker_eps.keys())
+            tlogger.record_tabular("UniqueWorkers", num_unique_workers)
+            tlogger.record_tabular("UniqueWorkersFrac", num_unique_workers / sum(worker_eps.values()))
+            tlogger.record_tabular("ResultsSkippedFrac", skip_frac)
+            #tlogger.record_tabular("ObCount", ob_count_this_batch)
+
+            tlogger.record_tabular("TimeElapsedThisIter", gen_tend - gen_tstart)
+            tlogger.record_tabular("TimeElapsed", gen_tend - exp_tstart)
+            tlogger.dump_tabular()
 
     def get_n_workers(self):
         if self.n_workers:

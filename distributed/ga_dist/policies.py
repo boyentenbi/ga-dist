@@ -75,7 +75,7 @@ class Policy:
             obs = []
         ob = env.reset()
         for _ in range(timestep_limit):
-            ac = self.act(ob[None], random_stream=random_stream)[0]
+            ac = self.act(np.expand_dims(ob, 0), random_stream=random_stream)
             if save_obs:
                 obs.append(ob)
             ob, rew, done, _ = env.step(ac)
@@ -114,7 +114,7 @@ class Policy:
             shape =v.get_shape().as_list()
             v_n_params = np.prod(shape)
             if len(shape) != 1:
-                logger.info("trainable variable {} has shape {} and is being glorot initilalized".format(v, v.get_shape()))
+                #logger.info("trainable variable {} has shape {} and is being glorot initilalized".format(v, v.get_shape()))
                 samples_reshape = np.reshape(samples[i:i+v_n_params], shape)
                 out = samples_reshape * std / np.sqrt(np.square(samples_reshape).sum(axis=0, keepdims=True))
                 inits[i:i+v_n_params] = np.reshape(out, [v_n_params])
@@ -317,7 +317,7 @@ class DiscretePolicy(Policy):
         a_dim = self.ac_space.shape[0]
         assert isinstance(self.ac_bins, str)
         #ac_bin_mode, ac_bin_arg = self.ac_bins.split(':')
-        a = tf.layers.dense(x, a_dim, self.nonlin)
+        a = tf.layers.dense(x, a_dim, tf.nn.softmax)
 
 
         # if ac_bin_mode == 'uniform':
@@ -354,7 +354,9 @@ class DiscretePolicy(Policy):
         return a
 
     def act(self, ob, random_stream=None):
-        a = np.random.choice(range(self.ac_space.shape[0]), p= self._act(ob))
+        p =  self._act(ob)[0]
+        choices = self.ac_space.shape[0]
+        a = np.random.choice(choices, p=p)
         return a
 
     @property
@@ -400,4 +402,3 @@ class DiscretePolicy(Policy):
         if ob_stat is not None:
             ob_stat.set_from_init(init_mean, init_std, init_count=1e5)
 
-    def initialize_from_seed(self):

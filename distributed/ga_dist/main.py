@@ -60,7 +60,7 @@ class DistributedTF(object):
                 master_port=6379,
                 master_socket_path='/var/run/redis/redis.sock')
 
-            master_node.begin_exp()
+            master_node.begin_exp('logs')
         else:
             # start the workers subscriptions
             node = WorkerNode(self.node_id, None, exp_config,

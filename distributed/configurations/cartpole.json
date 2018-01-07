@@ -3,7 +3,7 @@
     "global_seed": 123,
     "n_gens": 100,
     "n_nodes": 1,
-    "init_timestep_limit":1000,
+    "init_tstep_limit":1000,
     "min_gen_time":0.2,
     "calc_obstat_prob": 0.01,
     "episodes_per_batch": 10000,
@@ -13,7 +13,11 @@
     "snapshot_freq": 20,
     "timesteps_per_batch": 100000,
     "return_proc_mode": "centered_rank",
-    "episode_cutoff_mode": "env_default"
+    "episode_cutoff_mode": "env_default",
+    "adaptive_tstep_lim": false,
+    "tstep_maxing_thresh": 0.5,
+    "tstep_lim_incr_ratio": 1.1,
+    "n_pop":0.1
   },
   "env_id": "CartPole-v0",
   "exp_prefix": "humanoid",
