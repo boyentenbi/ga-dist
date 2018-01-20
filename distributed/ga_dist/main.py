@@ -1,14 +1,14 @@
 import json
-import redis
+#import redis
 import logging
 import os
-import hostlist
+#import hostlist
 from nodes import MasterNode, WorkerNode
 from clients import MasterClient, RelayClient, WorkerClient
 
 logging.basicConfig(level=logging.DEBUG)
 log = logging.Logger("fake_cluster")
-with open("configurations/cartpole.json", 'r') as f:
+with open("../configurations/cartpole.json", 'r') as f:
     exp_config = json.loads(f.read())
 
 import time

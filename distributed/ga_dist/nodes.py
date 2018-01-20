@@ -21,7 +21,7 @@ Config = namedtuple('Config', [
     'l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
     'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
     'return_proc_mode', 'episode_cutoff_mode', "adaptive_tstep_lim", 'tstep_lim_incr_ratio',
-    'n_pop', 'tstep_maxing_thresh',
+    'trunc_frac', 'tstep_maxing_thresh', 'n_noise'
 ])
 
 Result = namedtuple('Result', [
@@ -43,10 +43,10 @@ def make_session(single_threaded):
     return tf.InteractiveSession(config=tf.ConfigProto(inter_op_parallelism_threads=1, intra_op_parallelism_threads=1))
 
 class SharedNoiseTable(object):
-    def __init__(self, seed):
+    def __init__(self, seed, n_noise):
         import ctypes, multiprocessing
 
-        count = 25*10**7  # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
+        count = n_noise#25*10**7  # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
         logger.info('Sampling {} random numbers with seed {}'.format(count, seed))
         self._shared_mem = multiprocessing.Array(ctypes.c_float, count)
         self.noise = np.ctypeslib.as_array(self._shared_mem.get_obj())
@@ -89,7 +89,7 @@ class Node:
         self.global_seed = self.config.global_seed
         #self.min_steps = self.config.min_steps
         #self.min_eps = self.config.min_eps
-        self.noise = SharedNoiseTable(self.global_seed)
+        self.noise = SharedNoiseTable(self.global_seed, self.config.n_noise)
         # Now a genome can be specified with a list of indices
         # Sampling seeds and then using the first sample from resulting normal
         # wouldn't necessarily give normally distributed samples!
@@ -125,8 +125,10 @@ class Node:
             ep_tstart = time.time()
 
             # Prep for rollouts
-            noise_sublists, returns, lengths = [], [], []
-            while not noise_sublists or time.time() - ep_tstart < self.config.min_gen_time:
+            #noise_sublists, returns, lengths = [], [], []
+            eps_done = 0
+            # loop if the number of eps is
+            while eps_done <1 or time.time() - ep_tstart < self.config.min_gen_time:
 
                 if len(gen_data.noise_lists) == 0 :
 
@@ -140,7 +142,7 @@ class Node:
                     noise_list = gen_data.noise_lists[rs.choice(len(gen_data.noise_lists))]
 
                     # Use the first index to initialize using glorot
-                    init_params = policy.glorot_flat_w_idxs(self.noise.get(noise_list[0]), std=1.)
+                    init_params = policy.glorot_flat_w_idxs(self.noise.get(noise_list[0], policy.num_params), std=1.)
 
                     # Use the remaining indices and one new index to mutate
                     new_noise_idx = self.noise.sample_index(rs, policy.num_params)
@@ -159,7 +161,13 @@ class Node:
                 logger.info('Eval result: gen={} return={:.3f} length={} time = {}'.format(
                     gen_num, eval_ret, length, duration))
                 wc.push_result(gen_num, Result(worker_id, noise_list, eval_ret, length, duration))
+                eps_done += 1
 
+                # This helps to debug
+                # can be left in anyway
+                if eps_done >=self.config.episodes_per_batch:
+                    logger.info("Worker {} finished more episodes than required in total for this batch. Stopping.".format(worker_id))
+                    break
 # The master node also has worker processes
 class MasterNode(Node):
     def __init__(self, node_id, n_workers, exp,
@@ -198,10 +206,14 @@ class MasterNode(Node):
         # Iterate over generations
         for gen_num in range(self.config.n_gens):
 
+            #print("Before declaring gen there are {} items on the queue.".format(self.master_client.master_redis.llen(RESULTS_KEY)))
             # Declare the gen
             self.master_client.declare_gen(
                 Gen(noise_lists=noise_lists,
                     timestep_limit=self.config.init_tstep_limit))
+            # Count the number on the queue immediately after declaring the generation
+            gen_start_queue_size = self.master_client.master_redis.llen(RESULTS_KEY)
+            # We shouldn't get more than this number of bad episodes
             gen_tstart = time.time()
             # Prep for new gen results
             n_gen_eps, n_gen_steps, \
@@ -230,6 +242,7 @@ class MasterNode(Node):
                     n_bad_eps += 1
                     n_bad_steps += r.len
                     bad_time += r.time
+                    assert n_bad_eps < gen_start_queue_size * 2
 
             # All other nodes are now wasting compute for master from here!
 
@@ -246,7 +259,7 @@ class MasterNode(Node):
             # Random sampling is done in worker processes
             # set the noise list ready for next iter
             order = sorted(range(n_gen_eps), key = lambda x: returns[x])
-            parent_idxs = order[-self.config.n_pop:]
+            parent_idxs = order[-int(self.config.trunc_frac*self.config.episodes_per_batch):]
             noise_lists = [noise_lists[parent_idx] for parent_idx in parent_idxs]
 
             # Compute the skip fraction

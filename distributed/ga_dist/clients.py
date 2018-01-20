@@ -104,7 +104,7 @@ class MasterClient:
         :return:
         """
         gen_num, result = deserialize(self.master_redis.blpop(RESULTS_KEY)[1])
-        logger.debug('[master] Popped a result for generation {}'.format(gen_num))
+        logger.debug('[master] Popped a result {} for generation {}'.format(result, gen_num))
         return gen_num, result
 
 class RelayClient:
@@ -115,7 +115,14 @@ class RelayClient:
     def __init__(self, master_redis_cfg, relay_redis_cfg):
         # Connect to the existing master redis
         self.master_redis = retry_connect(master_redis_cfg)
+        # logger.info("Before flush {} items on the queue.".format(
+        #     self.master_redis.llen(RESULTS_KEY)))
+
         self.master_redis.flushall()
+        #time.sleep(0.1)
+        assert self.master_redis.llen(RESULTS_KEY) == 0
+        # logger.info("After flush {} items on the queue.".format(
+        #     self.master_redis.llen(RESULTS_KEY)))
         logger.info('[relay] Connected to master: {}'.format(self.master_redis))
         # Create the relay redis
         self.local_redis = retry_connect(relay_redis_cfg)
@@ -139,6 +146,7 @@ class RelayClient:
             while curr_time - start_time < 0.001:
                 results.append(self.local_redis.blpop(RESULTS_KEY)[1])
                 curr_time = time.time()
+            #logger.info("Appending {} results from local redis to master redis".format(len(results)))
             self.master_redis.rpush(RESULTS_KEY, *results)
 
         # Log
