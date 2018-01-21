@@ -139,15 +139,16 @@ class Node:
                         self.noise.get(noise_list[0], policy.num_params), std=1.)
                 else:
                     # Sample a noise list from the broadcast ones
-                    noise_list = gen_data.noise_lists[rs.choice(len(gen_data.noise_lists))]
+                    old_noise_list = gen_data.noise_lists[rs.choice(len(gen_data.noise_lists))]
 
                     # Use the first index to initialize using glorot
                     init_params = policy.glorot_flat_w_idxs(self.noise.get(noise_list[0], policy.num_params), std=1.)
 
                     # Use the remaining indices and one new index to mutate
                     new_noise_idx = self.noise.sample_index(rs, policy.num_params)
+                    noise_list = old_noise_list + [new_noise_idx]
                     v = init_params
-                    for j in noise_list[1:] + [new_noise_idx]:
+                    for j in noise_list[1:]:
                         v += self.config.noise_stdev * self.noise.get(j, policy.num_params)
 
                 policy.set_trainable_flat(v)
@@ -225,6 +226,7 @@ class MasterNode(Node):
                     n_gen_steps < self.config.timesteps_per_batch:
                 # Pop a result, accumulate if current gen, throw if past gen
                 worker_gen_num, r = self.master_client.pop_result()
+
                 if worker_gen_num == gen_num:
                     worker_id = r.worker_id
                     if worker_id in worker_eps:
@@ -232,6 +234,7 @@ class MasterNode(Node):
                     else:
                         worker_eps[worker_id] = 1
                     n_gen_eps += 1
+
                     n_gen_steps += r.len
                     noise_lists.append(r.noise_list)
                     returns.append(r.ret)
@@ -242,8 +245,8 @@ class MasterNode(Node):
                     n_bad_eps += 1
                     n_bad_steps += r.len
                     bad_time += r.time
-                    assert n_bad_eps < gen_start_queue_size * 2
-
+                    assert n_bad_eps < gen_start_queue_size + 200
+                logger.info("n_gen_eps = {}, n_bad_eps = {}".format(n_gen_eps, n_bad_eps))
             # All other nodes are now wasting compute for master from here!
 
             # Determine if the timestep limit needs to be increased
@@ -272,17 +275,17 @@ class MasterNode(Node):
             gen_tend = time.time()
 
             # Reward distribution
-            tlogger.record_tabular("EpRetMed", np.nan if not returns else np.median(returns))
             tlogger.record_tabular("EpRetMax", np.nan if not returns else np.max(returns))
+            tlogger.record_tabular("EpRetUQ", np.nan if not returns else np.percentile(returns, 75))
+            tlogger.record_tabular("EpRetMed", np.nan if not returns else np.median(returns))
+            tlogger.record_tabular("EpRetLQ", np.nan if not returns else np.percentile(returns, 25))
             tlogger.record_tabular("EpRetMin", np.nan if not returns else np.min(returns))
-            tlogger.record_tabular("EpRetUQ", np.nan if not returns else np.percentile(returns, 0.75))
-            tlogger.record_tabular("EpRetLQ", np.nan if not returns else np.percentile(returns, 0.25))
 
-            tlogger.record_tabular("EpLenMed", np.nan if not lens else np.median(lens))
             tlogger.record_tabular("EpLenMax", np.nan if not lens else np.max(lens))
+            tlogger.record_tabular("EpLenUQ", np.nan if not lens else np.percentile(lens, 75))
+            tlogger.record_tabular("EpLenMed", np.nan if not lens else np.median(lens))
+            tlogger.record_tabular("EpLenLQ", np.nan if not lens else np.percentile(lens, 25))
             tlogger.record_tabular("EpLenMin", np.nan if not lens else np.min(lens))
-            tlogger.record_tabular("EpLenUQ", np.nan if not lens else np.percentile(lens, 0.75))
-            tlogger.record_tabular("EpLenLQ", np.nan if not lens else np.percentile(lens, 0.25))
 
             # tlogger.record_tabular("EvalPopRank", np.nan if not returns else (
             #         np.searchsorted(np.sort(returns_n2.ravel()), returns).mean() / returns_n2.size))
@@ -298,8 +301,15 @@ class MasterNode(Node):
             tlogger.record_tabular("TimestepsSoFar", n_exp_steps)
 
             num_unique_workers = len(worker_eps.keys())
+            weps = worker_eps.values()
             tlogger.record_tabular("UniqueWorkers", num_unique_workers)
-            tlogger.record_tabular("UniqueWorkersFrac", num_unique_workers / sum(worker_eps.values()))
+            tlogger.record_tabular("UniqueWorkersFrac", num_unique_workers / sum(weps))
+            tlogger.record_tabular("WorkerEpsMax", max(weps))
+            tlogger.record_tabular("WorkerEpsUQ", np.percentile(weps, 75))
+            tlogger.record_tabular("WorkerEpsMed", np.median(weps))
+            tlogger.record_tabular("WorkerEpsLQ", np.percentile(weps,25))
+            tlogger.record_tabular("WorkerEpsMin", np.min(weps))
+
             tlogger.record_tabular("ResultsSkippedFrac", skip_frac)
             #tlogger.record_tabular("ObCount", ob_count_this_batch)
 
