@@ -141,12 +141,13 @@ class Node:
                     # Sample a noise list from the broadcast ones
                     old_noise_list = gen_data.noise_lists[rs.choice(len(gen_data.noise_lists))]
 
-                    # Use the first index to initialize using glorot
-                    init_params = policy.glorot_flat_w_idxs(self.noise.get(noise_list[0], policy.num_params), std=1.)
-
                     # Use the remaining indices and one new index to mutate
                     new_noise_idx = self.noise.sample_index(rs, policy.num_params)
                     noise_list = old_noise_list + [new_noise_idx]
+
+                    # Use the first index to initialize using glorot
+                    init_params = policy.glorot_flat_w_idxs(self.noise.get(noise_list[0], policy.num_params), std=1.)
+
                     v = init_params
                     for j in noise_list[1:]:
                         v += self.config.noise_stdev * self.noise.get(j, policy.num_params)
@@ -276,11 +277,14 @@ class MasterNode(Node):
 
             # Reward distribution
             tlogger.record_tabular("EpRetMax", np.nan if not returns else np.max(returns))
+            tlogger.record_tabular("EpRetMinParent", np.nan if not returns else returns[parent_idxs[0]])
+
             tlogger.record_tabular("EpRetUQ", np.nan if not returns else np.percentile(returns, 75))
             tlogger.record_tabular("EpRetMed", np.nan if not returns else np.median(returns))
             tlogger.record_tabular("EpRetLQ", np.nan if not returns else np.percentile(returns, 25))
             tlogger.record_tabular("EpRetMin", np.nan if not returns else np.min(returns))
 
+            # Ep len distribution
             tlogger.record_tabular("EpLenMax", np.nan if not lens else np.max(lens))
             tlogger.record_tabular("EpLenUQ", np.nan if not lens else np.percentile(lens, 75))
             tlogger.record_tabular("EpLenMed", np.nan if not lens else np.median(lens))
@@ -291,6 +295,7 @@ class MasterNode(Node):
             #         np.searchsorted(np.sort(returns_n2.ravel()), returns).mean() / returns_n2.size))
             tlogger.record_tabular("EpCount", n_gen_eps)
 
+            # Parent reward distribution
 
 
             #tlogger.record_tabular("Norm", float(np.square(policy.get_trainable_flat()).sum()))
@@ -301,10 +306,10 @@ class MasterNode(Node):
             tlogger.record_tabular("TimestepsSoFar", n_exp_steps)
 
             num_unique_workers = len(worker_eps.keys())
-            weps = worker_eps.values()
+            weps = np.asarray([x for x in worker_eps.values()])
             tlogger.record_tabular("UniqueWorkers", num_unique_workers)
-            tlogger.record_tabular("UniqueWorkersFrac", num_unique_workers / sum(weps))
-            tlogger.record_tabular("WorkerEpsMax", max(weps))
+            tlogger.record_tabular("UniqueWorkersFrac", num_unique_workers / np.sum(weps))
+            tlogger.record_tabular("WorkerEpsMax", np.max(weps))
             tlogger.record_tabular("WorkerEpsUQ", np.percentile(weps, 75))
             tlogger.record_tabular("WorkerEpsMed", np.median(weps))
             tlogger.record_tabular("WorkerEpsLQ", np.percentile(weps,25))
