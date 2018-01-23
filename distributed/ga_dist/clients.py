@@ -71,8 +71,12 @@ class MasterClient:
     def __init__(self, master_redis_cfg):
         # Create the master data store
         self.master_redis = retry_connect(master_redis_cfg)
+        self.master_redis.flushdb()
+        assert self.master_redis.llen(RESULTS_KEY)==0
+
         logger.info('[master] connected to Redis: {}'.format(self.master_redis))
         self.gen_counter = 0
+
     def declare_experiment(self, exp):
         self.master_redis.set(EXP_KEY, exp)
         logger.info('[master] Declared experiment {}'.format(pformat(exp)))
@@ -118,14 +122,17 @@ class RelayClient:
         # logger.info("Before flush {} items on the queue.".format(
         #     self.master_redis.llen(RESULTS_KEY)))
 
-        self.master_redis.flushall()
+        #self.master_redis.flushall()
         #time.sleep(0.1)
-        assert self.master_redis.llen(RESULTS_KEY) == 0
+
         # logger.info("After flush {} items on the queue.".format(
         #     self.master_redis.llen(RESULTS_KEY)))
         logger.info('[relay] Connected to master: {}'.format(self.master_redis))
         # Create the relay redis
         self.local_redis = retry_connect(relay_redis_cfg)
+        self.local_redis.flushdb()
+        assert self.local_redis.llen(RESULTS_KEY)==0
+
         logger.info('[relay] Connected to relay: {}'.format(self.local_redis))
 
     # Continually checks for results in the relay and batches them

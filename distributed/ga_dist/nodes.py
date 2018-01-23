@@ -63,7 +63,7 @@ class SharedNoiseTable(object):
 
 class Node:
     def __init__(self, node_id, n_workers, exp,
-                 master_host, master_port, socket_path):
+                 master_host, master_port, relay_socket, master_pw):
 
         # Initialize networking
         self.master_port = master_port
@@ -71,18 +71,16 @@ class Node:
         if n_workers:
             assert n_workers < os.cpu_count()
         self.n_workers = None
-        self.n_workers = n_workers if n_workers else self.get_n_workers()
-        self.socket_path = socket_path
-        self.relay_redis_cfg = {'unix_socket_path': socket_path, 'db': 1}
-        self.master_redis_cfg = self.get_master_redis_cfg()
-        self.master_host = master_host
+        self.n_workers = n_workers if n_workers is not None else self.get_n_workers()
+        self.relay_socket = relay_socket
+        self.relay_redis_cfg = {'unix_socket_path': relay_socket, 'db': 1, }
+        self.master_redis_cfg = {'host': master_host, 'db': 0, 'password': master_pw}
         self.exp = exp
 
         # Relay client process
         rcp = Process(target = RelayClient(self.master_redis_cfg,
                                            self.relay_redis_cfg).run)
         rcp.start()
-
 
         # Initialize the experiments
         self.config = Config(**self.exp['config'])
@@ -101,8 +99,8 @@ class Node:
 
     def get_n_workers(self):
         raise NotImplementedError
-    def get_master_redis_cfg(self):
-        raise NotImplementedError
+    # def get_master_redis_cfg(self, password):
+    #     raise NotImplementedError
 
     def worker_process(self):
         wc = WorkerClient(relay_redis_cfg=self.relay_redis_cfg)
@@ -170,14 +168,15 @@ class Node:
                 if eps_done >=self.config.episodes_per_batch:
                     logger.info("Worker {} finished more episodes than required in total for this batch. Stopping.".format(worker_id))
                     break
+
 # The master node also has worker processes
 class MasterNode(Node):
     def __init__(self, node_id, n_workers, exp,
-                 master_host, master_port, master_socket_path):
+                 master_host, master_port, relay_socket, master_pw):
 
         # Initialize networking
         super().__init__(node_id, n_workers, exp,
-                         master_host, master_port, master_socket_path)
+                         master_host, master_port, relay_socket, master_pw)
         logger.info("Node {} contains the master client.".format(self.node_id))
         self.master_client = MasterClient(self.master_redis_cfg)
         self.cluster_n_workers = self.config.n_nodes*(self.n_workers+1)-1
@@ -246,7 +245,7 @@ class MasterNode(Node):
                     n_bad_eps += 1
                     n_bad_steps += r.len
                     bad_time += r.time
-                    assert n_bad_eps < gen_start_queue_size + 200
+                    assert n_bad_eps < gen_start_queue_size + 10000
                 logger.info("n_gen_eps = {}, n_bad_eps = {}".format(n_gen_eps, n_bad_eps))
             # All other nodes are now wasting compute for master from here!
 
@@ -328,17 +327,17 @@ class MasterNode(Node):
         else:
             return os.cpu_count() - 2
 
-    def get_master_redis_cfg(self):
-        return {'unix_socket_path': self.socket_path, 'db': 0}
+    # def get_master_redis_cfg(self, password):
+    #     return {'unix_socket_path': self.socket_path, 'db': 0, "password": password}
 
 
 class WorkerNode(Node):
     def __init__(self, node_id, n_workers, exp,
-                 master_host, master_port, socket_path):
+                 master_host, master_port, relay_socket, master_pw):
         super().__init__(node_id, n_workers, exp,
-                         master_host, master_port, socket_path)
+                         master_host, master_port, relay_socket, master_pw)
 
-        log.info("Node {} is a worker node".format(self.node_id))
+        logger.info("Node {} is a worker node".format(self.node_id))
         assert n_workers <= os.cpu_count()
         self.n_workers = n_workers if n_workers else os.cpu_count() -1
 
@@ -348,6 +347,6 @@ class WorkerNode(Node):
         else:
             return os.cpu_count() - 1
 
-    def get_master_redis_cfg(self):
-        return {'host': self.master_host, 'port': self.master_port, 'db':0}
+    # def get_master_redis_cfg(self, password):
+    #     return {'host': self.master_host, 'port': self.master_port, 'db':0, 'password':password}
 

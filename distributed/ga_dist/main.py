@@ -5,73 +5,47 @@ import os
 #import hostlist
 from nodes import MasterNode, WorkerNode
 from clients import MasterClient, RelayClient, WorkerClient
+import argparse
 
-logging.basicConfig(level=logging.DEBUG)
-log = logging.Logger("fake_cluster")
-with open("../configurations/cartpole.json", 'r') as f:
-    exp_config = json.loads(f.read())
+if __name__ == "__main__":
 
-import time
-# Simulate server starts
-
-class DistributedTF(object):
-
-    def __init__(self, num_nodes, node_id):
-        self.node_name = None
-        self.node_list = None
-        self.node_id = node_id
-        self.num_nodes = num_nodes
-        self.job_name = "ga_dist_test"
-        self.fake_setup()
+    logging.basicConfig(level=logging.DEBUG)
+    logger = logging.Logger("fake_cluster")
+    with open("../configurations/cartpole.json", 'r') as f:
+        exp_config = json.loads(f.read())
 
 
-        if self.node_id == 0:
-            log.info("main node sleeping.")
-            time.sleep(1)
-            # just makes sure that the lead node sleeps for a while to let the others setup.
-            # could actually get them to communicate so that this starts when it knows others
-            # are ready.
+    parser = argparse.ArgumentParser(description='Start a master or worker node for the GA experiment')
+    parser.add_argument('--master', dest='is_master', action='store_const',
+                        const=True, default=False,
+                        help='make this node the master')
 
-    def fake_setup(self):
-        # print(os.environ)
-        self.node_name = 'cpu-e-{}'.format(self.node_id)
-        self.node_list = ['cpu-e-{}'.format(nid) for nid in range(self.num_nodes)]
-        print(self.node_list)
-        self.num_tasks = len(self.node_list)  # int(os.environ["SLURM_NTASKS"])
-        # assert int(self.nawum_tasks) == len(self.node_list), "currently only setup for one task per node"
+    args = parser.parse_args()
 
-        log.info("node name: {}, assigned id: {}, num tasks: {} \n node list: {}".format(
-            self.node_name, self.node_id, self.num_tasks, self.node_list
-        ))
-        self.num_nodes = len(self.node_list)
+    # Load the experiment from file
+    if args.is_master:
+        # This node contains the master
+        master_node = MasterNode(
+            0,
+            0,
+            exp_config,
+            master_host='localhost',
+            master_port=6379,
+            relay_socket='/tmp/es_redis_relay.sock',
+            master_pw= "deepbrickwindowattack")
+        master_node.begin_exp('logs')
 
-    def main(self):
+    else:
+        # start the workers subscriptions
+        node = WorkerNode(1,
+                          1,
+                          exp_config,
+                          master_host='10.43.7.13',
+                          master_port=6379,
+                          relay_socket='/tmp/es_redis_relay.sock',
+                          master_pw= "deepbrickwindowattack")
+        logger.info("Node {} joining server.".format(1))
 
-        # Load the experiment from file
-
-
-        if self.node_id == 0:
-            # This node contains the master
-            master_node = MasterNode(
-                self.node_id,
-                None,
-                exp_config,
-                master_host='localhost',
-                master_port=6379,
-                master_socket_path='/var/run/redis/redis.sock')
-
-            master_node.begin_exp('logs')
-        else:
-            # start the workers subscriptions
-            node = WorkerNode(self.node_id, None, exp_config,
-                 master_host='localhost', master_port=6379, master_socket_path='/var/run/redis/redis.sock')
-            log.info("Node {} joining server.".format(self.node_id))
-
-# Test with only the node containing the master client
-N_SIM_WORKERS = 0
-
-dtf = DistributedTF(0, node_id = 0)
-dtf.main()
-print("done!")
+    print("done!")
 
 

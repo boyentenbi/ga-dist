@@ -21,14 +21,14 @@ class Policy:
         self._setfromflat = U.SetFromFlat(self.trainable_variables)
         self._getflat = U.GetFlat(self.trainable_variables)
 
-        logger.info('Trainable variables ({} parameters)'.format(self.num_params))
-        for v in self.trainable_variables:
-            shp = v.get_shape().as_list()
-            logger.info('- {} shape:{} size:{}'.format(v.name, shp, np.prod(shp)))
-        logger.info('All variables')
-        for v in self.all_variables:
-            shp = v.get_shape().as_list()
-            logger.info('- {} shape:{} size:{}'.format(v.name, shp, np.prod(shp)))
+        # logger.info('Trainable variables ({} parameters)'.format(self.num_params))
+        # for v in self.trainable_variables:
+        #     shp = v.get_shape().as_list()
+        #     logger.info('- {} shape:{} size:{}'.format(v.name, shp, np.prod(shp)))
+        # logger.info('All variables')
+        # for v in self.all_variables:
+        #     shp = v.get_shape().as_list()
+        #     logger.info('- {} shape:{} size:{}'.format(v.name, shp, np.prod(shp)))
 
         placeholders = [tf.placeholder(v.value().dtype, v.get_shape().as_list()) for v in self.all_variables]
         self.set_all_vars = U.function(

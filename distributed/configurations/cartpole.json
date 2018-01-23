@@ -1,7 +1,7 @@
 {
   "config": {
     "global_seed": 123,
-    "n_gens": 100,
+    "n_gens": 10,
     "n_nodes": 1,
     "n_noise": 250000000,
     "init_tstep_limit":1000,
