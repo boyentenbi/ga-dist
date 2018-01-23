@@ -11,9 +11,8 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.Logger("fake_cluster")
-    with open("../configurations/cartpole.json", 'r') as f:
+    with open("../configurations/breakout.json", 'r') as f:
         exp_config = json.loads(f.read())
-
 
     parser = argparse.ArgumentParser(description='Start a master or worker node for the GA experiment')
     parser.add_argument('--master', dest='is_master', action='store_const',

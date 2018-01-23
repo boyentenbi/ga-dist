@@ -32,6 +32,9 @@ Result = namedtuple('Result', [
     'time'
 ])
 
+
+
+
 Gen = namedtuple('Gen', ['noise_lists', 'timestep_limit'])
 
 logger = logging.getLogger(__name__)
@@ -128,20 +131,25 @@ class Node:
             # loop if the number of eps is
             while eps_done <1 or time.time() - ep_tstart < self.config.min_gen_time:
 
-                if len(gen_data.noise_lists) == 0 :
+                if len(gen_data.noise_lists) == 0:
 
                     # Create a list with a single randomly draw index
-                    noise_list = [self.noise.sample_index(rs, policy.num_params)]
+                    new_idx = self.noise.sample_index(rs, policy.num_params)
+                    noise_list = [new_idx]
                     # Use the first index to initialize using glorot
                     v = policy.glorot_flat_w_idxs(
                         self.noise.get(noise_list[0], policy.num_params), std=1.)
+
+                    parent_idx = None
+
                 else:
+                    parent_idx = rs.choice(len(gen_data.noise_lists))
                     # Sample a noise list from the broadcast ones
-                    old_noise_list = gen_data.noise_lists[rs.choice(len(gen_data.noise_lists))]
+                    old_noise_list = gen_data.noise_lists[parent_idx]
 
                     # Use the remaining indices and one new index to mutate
-                    new_noise_idx = self.noise.sample_index(rs, policy.num_params)
-                    noise_list = old_noise_list + [new_noise_idx]
+                    new_idx = self.noise.sample_index(rs, policy.num_params)
+                    noise_list = old_noise_list + [new_idx]
 
                     # Use the first index to initialize using glorot
                     init_params = policy.glorot_flat_w_idxs(self.noise.get(noise_list[0], policy.num_params), std=1.)
@@ -236,7 +244,7 @@ class MasterNode(Node):
                     n_gen_eps += 1
 
                     n_gen_steps += r.len
-                    noise_lists.append(r.noise_list)
+                    noise_lists.append(r.noise_lists)
                     returns.append(r.ret)
                     lens.append(r.len)
                     n_exp_eps +=1
