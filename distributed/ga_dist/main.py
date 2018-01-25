@@ -11,7 +11,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.Logger("fake_cluster")
-    with open("../configurations/breakout.json", 'r') as f:
+    with open("../configurations/skiing.json", 'r') as f:
         exp_config = json.loads(f.read())
 
     parser = argparse.ArgumentParser(description='Start a master or worker node for the GA experiment')
@@ -26,7 +26,7 @@ if __name__ == "__main__":
         # This node contains the master
         master_node = MasterNode(
             0,
-            0,
+            2,
             exp_config,
             master_host='localhost',
             master_port=6379,
@@ -37,7 +37,7 @@ if __name__ == "__main__":
     else:
         # start the workers subscriptions
         node = WorkerNode(1,
-                          1,
+                          29,
                           exp_config,
                           master_host='10.43.7.13',
                           master_port=6379,

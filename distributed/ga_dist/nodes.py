@@ -1,15 +1,15 @@
 import logging
 import os
 from clients import MasterClient, RelayClient, WorkerClient
-from clients import EXP_KEY, GEN_DATA_KEY, GEN_NUM_KEY, TASK_CHANNEL, RESULTS_KEY
+from clients import EXP_KEY, GEN_DATA_KEY, GEN_ID_KEY, TASK_CHANNEL, RESULTS_KEY
 from multiprocessing import Process
 import json
 from queue import PriorityQueue
 import time
 import numpy as np
-
+import csv
 import gym
-
+from baselines.common.atari_wrappers import make_atari, wrap_deepmind
 gym.undo_logger_setup()
 import policies, tf_util
 from collections import namedtuple
@@ -108,7 +108,8 @@ class Node:
     def worker_process(self):
         wc = WorkerClient(relay_redis_cfg=self.relay_redis_cfg)
         # Set up the experiment
-        env = gym.make(self.exp['env_id'])
+
+        env = wrap_deepmind(make_atari(self.exp['env_id']), frame_stack=True, scale=True, episode_life=False, clip_rewards=False)
         sess = make_session(single_threaded=True)
         policy_class = getattr(policies, self.exp['policy']['type'])
         policy = policy_class(env.observation_space,
@@ -121,8 +122,8 @@ class Node:
         # Keep iterating through generations infinitely?
         while True:
             # Grab generation data
-            gen_num, gen_data = wc.get_current_gen()
-            assert isinstance(gen_num, int) and isinstance(gen_data, Gen)
+            gen_id, gen_data = wc.get_current_gen()
+            assert isinstance(gen_id, int) and isinstance(gen_data, Gen)
             ep_tstart = time.time()
 
             # Prep for rollouts
@@ -137,8 +138,8 @@ class Node:
                     new_idx = self.noise.sample_index(rs, policy.num_params)
                     noise_list = [new_idx]
                     # Use the first index to initialize using glorot
-                    v = policy.glorot_flat_w_idxs(
-                        self.noise.get(noise_list[0], policy.num_params), std=1.)
+                    v = policy.init_from_noise_idxs(
+                        self.noise.get(noise_list[0], policy.num_params))
 
                     parent_idx = None
 
@@ -152,23 +153,23 @@ class Node:
                     noise_list = old_noise_list + [new_idx]
 
                     # Use the first index to initialize using glorot
-                    init_params = policy.glorot_flat_w_idxs(self.noise.get(noise_list[0], policy.num_params), std=1.)
+                    init_params = policy.init_from_noise_idxs(self.noise.get(noise_list[0], policy.num_params))
 
                     v = init_params
                     for j in noise_list[1:]:
                         v += self.config.noise_stdev * self.noise.get(j, policy.num_params)
 
                 policy.set_trainable_flat(v)
-                rewards, length = policy.rollout(env)
+                rewards, length = policy.rollout(env, timestep_limit=self.config.init_tstep_limit)
 
                 # policy.set_trainable_flat(task_data.params - v)
                 # rews_neg, len_neg = rollout_and_update_ob_stat(
                 #     policy, env, task_data.timestep_limit, rs, task_ob_stat, config.calc_obstat_prob)
                 eval_ret = np.sum(rewards)
                 duration = time.time() - ep_tstart
-                logger.info('Eval result: gen={} return={:.3f} length={} time = {}'.format(
-                    gen_num, eval_ret, length, duration))
-                wc.push_result(gen_num, Result(worker_id, noise_list, eval_ret, length, duration))
+                logger.info('Eval result: gen_id={} return={:.3f} length={} time = {}'.format(
+                    gen_id, eval_ret, length, duration))
+                wc.push_result(gen_id, Result(worker_id, noise_list, eval_ret, length, duration))
                 eps_done += 1
 
                 # This helps to debug
@@ -202,10 +203,23 @@ class MasterNode(Node):
         logger.info('Tabular logging to {}'.format(log_dir))
         tlogger.start(log_dir)
 
+        fieldnames = ['EpRetMax', 'EpRetParentMin', 'EpRetUQ', 'EpRetMed', 'EpRetLQ', 'EpRetMin',
+         'EpLenMax', 'EpLenUQ', 'EpLenMed', 'EpLenLQ', 'EpLenMin',
+         "EpisodesSoFar", "TimestepsThisIter", "TimestepsSoFar",
+         "UniqueWorkers", "UniqueWorkersFrac", "WorkerEpsMax", "WorkerEpsUQ", "WorkerEpsMed", "WorkerEpsLQ",
+         "WorkerEpsMin",
+         "ResultsSkippedFrac",
+         "TimeElapsedThisIter", "TimeElapsed",
+         ]
+        with open(log_dir+"/"+csv_log_file, 'wb') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+
+
         tstep_lim = self.config.init_tstep_limit
         n_exp_eps, n_exp_steps = 0, 0
 
-        env = gym.make(self.exp['env_id'])
+        env = wrap_deepmind(make_atari(self.exp['env_id']), frame_stack=True, scale=True, episode_life=False, clip_rewards=False)
         sess = make_session(single_threaded=True)
         policy_class = getattr(policies, self.exp['policy']['type'])
         policy = policy_class(env.observation_space,
@@ -217,7 +231,7 @@ class MasterNode(Node):
 
             #print("Before declaring gen there are {} items on the queue.".format(self.master_client.master_redis.llen(RESULTS_KEY)))
             # Declare the gen
-            self.master_client.declare_gen(
+            gen_id = self.master_client.declare_gen(
                 Gen(noise_lists=noise_lists,
                     timestep_limit=self.config.init_tstep_limit))
             # Count the number on the queue immediately after declaring the generation
@@ -233,9 +247,9 @@ class MasterNode(Node):
             while n_gen_eps < self.config.episodes_per_batch or \
                     n_gen_steps < self.config.timesteps_per_batch:
                 # Pop a result, accumulate if current gen, throw if past gen
-                worker_gen_num, r = self.master_client.pop_result()
+                worker_gen_id, r = self.master_client.pop_result()
 
-                if worker_gen_num == gen_num:
+                if worker_gen_id == gen_id:
                     worker_id = r.worker_id
                     if worker_id in worker_eps:
                         worker_eps[worker_id] += 1
@@ -244,11 +258,11 @@ class MasterNode(Node):
                     n_gen_eps += 1
 
                     n_gen_steps += r.len
-                    noise_lists.append(r.noise_lists)
+                    noise_lists.append(r.noise_list)
                     returns.append(r.ret)
                     lens.append(r.len)
                     n_exp_eps +=1
-                    n_exp_steps += 1
+                    n_exp_steps += r.len
                 else:
                     n_bad_eps += 1
                     n_bad_steps += r.len
@@ -304,7 +318,6 @@ class MasterNode(Node):
 
             # Parent reward distribution
 
-
             #tlogger.record_tabular("Norm", float(np.square(policy.get_trainable_flat()).sum()))
 
             #tlogger.record_tabular("EpisodesThisIter", n_gen_eps)
@@ -328,6 +341,35 @@ class MasterNode(Node):
             tlogger.record_tabular("TimeElapsedThisIter", gen_tend - gen_tstart)
             tlogger.record_tabular("TimeElapsed", gen_tend - exp_tstart)
             tlogger.dump_tabular()
+
+            with open(log_dir+"/"+csv_log_file, 'a') as csvfile:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writerow({"EpRetMax": np.max(returns),
+                                 "EpRetParentMin": returns[parent_idxs[0]],
+                                 "EpRetUQ": np.percentile(returns, 75),
+                                 "EpRetMed": np.median(returns),
+                                 "EpRetLQ": np.percentile(returns, 25),
+                                 "EpRetMin": np.min(returns),
+
+                                 "EpLenMax": np.nan if not lens else np.max(lens),
+                                 "EpLenUQ": np.nan if not lens else np.percentile(lens,75),
+                                 "EpLenMed": np.nan if not lens else np.median(lens),
+                                 "EpLenLQ": np.nan if not lens else np.percentile(lens,25),
+                                 "EpLenMin": np.nan if not lens else np.min(lens),
+
+                                 "EpCount": n_gen_eps,
+                                 "EpisodesSoFar": n_exp_eps,
+                                 "TimeStepsThisIter": n_gen_steps,
+                                 "TimestepsSoFar": n_exp_steps,
+
+                                 "UniqueWorkers": num_unique_workers),
+                                "UniqueWorkersFrac": num_unique_workers / np.sum(weps),
+                                "WorkerEpsMax": np.max(weps),
+                                "WorkerEpsUQ": np.percentile(weps, 75),
+                                "WorkerEpsMed": np.median(weps),
+                                "WorkerEpsLQ": np.percentile(weps, 25),
+                                "WorkerEpsMin": np.min(weps)}
+
 
     def get_n_workers(self):
         if self.n_workers:

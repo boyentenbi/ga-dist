@@ -69,6 +69,7 @@ class Policy:
         """
         env_timestep_limit = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
         timestep_limit = env_timestep_limit if timestep_limit is None else min(timestep_limit, env_timestep_limit)
+        #logger.info("rolling out with timestep limit of {}".format(timestep_limit))
         rews = []
         t = 0
         if save_obs:
@@ -107,31 +108,54 @@ class Policy:
         raise NotImplementedError
 
     # YOU NEED THE SHAPE TO DO THE GLOROT!
-    def glorot_flat_w_idxs(self, samples, std =1.):  # pylint: disable=W0613
+    def init_from_noise_idxs(self, samples, glorot_std = 1.):  # pylint: disable=W0613
         inits = np.zeros([self.num_params])
         i = 0
         for v in self.trainable_variables:
+            policy_type, layer, param_type = v.name.split("/")
             shape =v.get_shape().as_list()
-            v_n_params = np.prod(shape)
-            if len(shape) != 1:
-                #logger.info("trainable variable {} has shape {} and is being glorot initilalized".format(v, v.get_shape()))
-                samples_reshape = np.reshape(samples[i:i+v_n_params], shape)
-                out = samples_reshape * std / np.sqrt(np.square(samples_reshape).sum(axis=0, keepdims=True))
-                inits[i:i+v_n_params] = np.reshape(out, [v_n_params])
+            v_n_scalars = np.prod(shape)
+            if layer[:5]=="dense":
+                if param_type[:6] == 'kernel':
+                    # glorot init
+                    # logger.info("trainable variable {} has shape {} and is being glorot initilalized".format(v.name, v.get_shape()))
+                    samples_reshape = np.reshape(samples[i:i+v_n_scalars], shape)
+                    out = samples_reshape * glorot_std / np.sqrt(np.square(samples_reshape).sum(axis=0, keepdims=True))
+                    inits[i:i+v_n_scalars] = np.reshape(out, [v_n_scalars])
+                else:
+                    # zero init
+                    assert param_type[:4] == 'bias'
+                    # logger.info(
+                    #     "trainable variable {} has shape {} and is being zero initialized".format(v.name, v.get_shape()))
+                    # inits is already zero here
+                    # the noise idxs passed over aren't used
+                    pass
+            elif layer[:4] == 'conv':
+                if param_type[:6] == 'kernel':
+
+                    # logger.info(
+                    #     "trainable variable {} has shape {} and is being glorot initilalized".format(v.name, v.get_shape()))
+                    samples_reshape = np.reshape(samples[i:i + v_n_scalars], shape)
+                    out = samples_reshape * glorot_std / np.sqrt(np.square(samples_reshape).sum(axis=(0, 1, 2), keepdims=True))
+                    inits[i:i + v_n_scalars] = np.reshape(out, [v_n_scalars])
+                else:
+                    # zero init
+                    assert param_type[:4] == 'bias'
+                    # logger.info(
+                    #     "trainable variable {} has shape {} and is being zero initialized".format(v.name,
+                    #                                                                               v.get_shape()))
+                    # inits is already zero here
+                    # the noise idxs passed over aren't used
             else:
-                # inits is already zero here
-                # the noise idxs passed over aren't used
-                pass
-            i += v_n_params
+                raise NotImplementedError
+            i += v_n_scalars
         assert i  == self.num_params
         return inits
-
 
 def bins(x, dim, num_bins, name):
     scores = U.dense(x, dim * num_bins, name, U.normc_initializer(0.01))
     scores_nab = tf.reshape(scores, [-1, dim, num_bins])
     return tf.argmax(scores_nab, 2)  # 0 ... num_bins-1
-
 
 class MujocoPolicy(Policy):
     def _initialize(self, ob_space, ac_space, ac_bins, ac_noise_std, nonlin_type, hidden_dims, connection_type):
@@ -436,6 +460,7 @@ class AtariPolicy(Policy):
             # ])
 
             # Policy network
+            #logger.info("Observation space has shape {}".format(ob_space.shape))
             o = tf.placeholder(tf.float32, [None] + list(ob_space.shape))
             a = self._make_net(o)
             self._act = U.function([o], a)
@@ -448,14 +473,14 @@ class AtariPolicy(Policy):
         for iconv, kernel_size, stride, channel_dim in zip(range(len(self.kernel_sizes)), self.kernel_sizes, self.strides, self.n_channels):
             x = tf.layers.conv2d(x, channel_dim, kernel_size, stride, name="conv{}".format(iconv))
 
-        y = tf.layers.flatten(x)
+        y = tf.contrib.layers.flatten(x)
 
         for ihidden, n_hidden in enumerate(self.hidden_dims):
-            x = tf.layers.dense(x, n_hidden, self.nonlin, 'h{}'.format(ihidden))
+            y = tf.layers.dense(y, n_hidden, self.nonlin, 'h{}'.format(ihidden))
 
         # Map to action
         a_dim = self.ac_space.shape[0]
-        a = tf.layers.dense(x, a_dim, tf.nn.softmax)
+        a = tf.layers.dense(y, a_dim, tf.nn.softmax)
 
         return a
 

@@ -1,10 +1,10 @@
 {
   "config": {
     "global_seed": 123,
-    "n_gens": 100,
+    "n_gens": 10,
     "n_nodes": 1,
     "n_noise": 250000000,
-    "init_tstep_limit":1000,
+    "init_tstep_limit":20000,
     "min_gen_time":0.2,
     "calc_obstat_prob": 0.01,
     "episodes_per_batch": 5000,
@@ -20,7 +20,7 @@
     "tstep_lim_incr_ratio": 1.1,
     "trunc_frac": 0.002
   },
-  "env_id": "Breakout-v0",
+  "env_id": "VentureNoFrameskip-v4",
   "exp_prefix": "humanoid",
   "optimizer": {
     "args": {

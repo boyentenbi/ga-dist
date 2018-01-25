@@ -3,11 +3,12 @@ import logging
 import redis
 import time
 import os
+import numpy as np
 from pprint import pformat
 logger  = logging.getLogger(__name__) # TODO what is __name__ ?
 import sys
 EXP_KEY = "ga:exp"
-GEN_NUM_KEY = "ga:task_id"
+GEN_ID_KEY = "ga:task_id"
 GEN_DATA_KEY = "ga:task_data"
 TASK_CHANNEL = 'ga:task_channel'
 RESULTS_KEY = 'ga:results'
@@ -87,19 +88,21 @@ class MasterClient:
         gen_num = self.gen_counter
         self.gen_counter += 1
 
+        gen_id = np.random.randint(2**32)
+
         # Serialize the data, ready to send
         gd = serialize(gen_data)
-        to_publish = serialize((gen_num, gd))
-        logger.info("Declaring generation {}. serialized has size {}".format(gen_num, sys.getsizeof(to_publish)))
+        to_publish = serialize((gen_id, gd))
+        logger.info("Declaring generation {} with id {}. serialized has size {}".format(gen_num, gen_id, sys.getsizeof(to_publish)))
 
         # Create the pipe and send both items at once
         p = self.master_redis.pipeline()
-        p.mset({GEN_NUM_KEY: gen_num,
+        p.mset({GEN_ID_KEY: gen_id,
                 GEN_DATA_KEY:gd})
         p.publish(TASK_CHANNEL, to_publish) # TODO serialized serialized?
         p.execute()
-        logger.debug('[master] declared generation {}'.format(gen_num))
-        return gen_num
+        logger.debug('[master] declared generation {} with id {}'.format(gen_num, gen_id))
+        return gen_id
 
     # Get a result from the relay redis
     def pop_result(self):
@@ -107,9 +110,9 @@ class MasterClient:
         Pops a result from the results
         :return:
         """
-        gen_num, result = deserialize(self.master_redis.blpop(RESULTS_KEY)[1])
-        logger.debug('[master] Popped a result {} for generation {}'.format(result, gen_num))
-        return gen_num, result
+        gen_id, result = deserialize(self.master_redis.blpop(RESULTS_KEY)[1])
+        logger.debug('[master] Popped a result {} for generation with id {}'.format(result, gen_id))
+        return gen_id, result
 
 class RelayClient:
     """
@@ -131,6 +134,7 @@ class RelayClient:
         # Create the relay redis
         self.local_redis = retry_connect(relay_redis_cfg)
         self.local_redis.flushdb()
+        #assert self.master_redis.get(GEN_NUM_KEY)is None
         assert self.local_redis.llen(RESULTS_KEY)==0
 
         logger.info('[relay] Connected to relay: {}'.format(self.local_redis))
@@ -140,7 +144,7 @@ class RelayClient:
     def run(self):
         # Initialization: read exp and latest gen from master
         self.local_redis.set(EXP_KEY, retry_get(self.master_redis, EXP_KEY))
-        self._declare_gen_local(*retry_get(self.master_redis, (GEN_NUM_KEY, GEN_DATA_KEY)))
+        self._declare_gen_local(*retry_get(self.master_redis, (GEN_ID_KEY, GEN_DATA_KEY)))
 
         # Start subscribing to tasks
         p = self.master_redis.pubsub(ignore_subscribe_messages=True)
@@ -162,9 +166,9 @@ class RelayClient:
             logger.info('[relay] Average batch size {:.3f}'.format(sum(batch_sizes) / len(batch_sizes)))
             last_print_time = curr_time
 
-    def _declare_gen_local(self, gen_num, gen_data):
-        logger.info('[relay] Received task {}'.format(gen_num))
-        self.local_redis.mset({GEN_NUM_KEY: gen_num, GEN_DATA_KEY: gen_data})
+    def _declare_gen_local(self, gen_id, gen_data):
+        logger.info('[relay] Received task {}'.format(gen_id))
+        self.local_redis.mset({GEN_ID_KEY: gen_id, GEN_DATA_KEY: gen_data})
 
     # def relay_noise_lists(self):
     #     self.master_redis.
@@ -179,7 +183,7 @@ class WorkerClient:
     def __init__(self, relay_redis_cfg):
         self.local_redis = retry_connect(relay_redis_cfg)
         logger.info('[worker] Connected to relay: {}'.format(self.local_redis))
-        self.cached_gen_num, self.cached_gen_data = None, None
+        self.cached_gen_id, self.cached_gen_data = None, None
 
     def get_experiment(self):
         exp = deserialize(retry_get(self.local_redis, EXP_KEY))
@@ -193,10 +197,10 @@ class WorkerClient:
             while True:
                 try:
                     # Look for a new gen
-                    p.watch(GEN_NUM_KEY)
-                    gen_num = int(retry_get(p, GEN_NUM_KEY))
-                    if gen_num == self.cached_gen_num:
-                        logger.debug('[worker] Returning cached gen_num {}'.format(gen_num))
+                    p.watch(GEN_ID_KEY)
+                    gen_id = int(retry_get(p, GEN_ID_KEY))
+                    if gen_id == self.cached_gen_id:
+                        logger.debug('[worker] Returning cached gen_id {}'.format(gen_id))
                         break
                     else:
                         # Got a gen num without an exception
@@ -204,22 +208,22 @@ class WorkerClient:
                         p.multi()
                         p.get(GEN_DATA_KEY)
                         logger.info(
-                            '[worker] Getting new gen {}. Cached gen was {}'.format(gen_num, self.cached_gen_num))
+                            '[worker] Getting new gen with id {}. Cached gen was {}'.format(gen_id, self.cached_gen_id))
                         gen_data = p.execute()[0]
                         self.cached_gen_data = deserialize(gen_data)
-                        self.cached_gen_num =  gen_num
+                        self.cached_gen_id =  gen_id
 
                         break
                 except redis.WatchError:
                     # Just try again
                     continue
 
-        return self.cached_gen_num, self.cached_gen_data
+        return self.cached_gen_id, self.cached_gen_data
 
-    def push_result(self, gen_num, result):
-        self.local_redis.rpush(RESULTS_KEY, serialize((gen_num, result)))
-        logger.debug('[worker] Pushed result for task {}'.format(gen_num))
+    def push_result(self, gen_id, result):
+        self.local_redis.rpush(RESULTS_KEY, serialize((gen_id, result)))
+        logger.debug('[worker] Pushed result for task {}'.format(gen_id))
 
     # def pop_noise_list(self):
-    #     gen_num, noise_list = deserialize(self.master_redis.blpop(NOISES_KEY)[1])
-    #     return gen_num, noise_list
+    #     gen_id, noise_list = deserialize(self.master_redis.blpop(NOISES_KEY)[1])
+    #     return gen_id, noise_list
