@@ -5,8 +5,10 @@ import time
 import os
 import numpy as np
 from pprint import pformat
-logger  = logging.getLogger(__name__) # TODO what is __name__ ?
 import sys
+
+logger  = logging.getLogger(__name__) # TODO what is __name__ ?
+
 EXP_KEY = "ga:exp"
 GEN_ID_KEY = "ga:task_id"
 GEN_DATA_KEY = "ga:task_data"
@@ -88,7 +90,7 @@ class MasterClient:
         gen_num = self.gen_counter
         self.gen_counter += 1
 
-        gen_id = np.random.randint(2**32)
+        gen_id = np.random.randint(2**31)
 
         # Serialize the data, ready to send
         gd = serialize(gen_data)
@@ -120,55 +122,66 @@ class RelayClient:
     """
 
     def __init__(self, master_redis_cfg, relay_redis_cfg):
+
         # Connect to the existing master redis
         self.master_redis = retry_connect(master_redis_cfg)
-        # logger.info("Before flush {} items on the queue.".format(
-        #     self.master_redis.llen(RESULTS_KEY)))
-
-        #self.master_redis.flushall()
-        #time.sleep(0.1)
-
-        # logger.info("After flush {} items on the queue.".format(
-        #     self.master_redis.llen(RESULTS_KEY)))
         logger.info('[relay] Connected to master: {}'.format(self.master_redis))
+
         # Create the relay redis
         self.local_redis = retry_connect(relay_redis_cfg)
         self.local_redis.flushdb()
-        #assert self.master_redis.get(GEN_NUM_KEY)is None
         assert self.local_redis.llen(RESULTS_KEY)==0
-
         logger.info('[relay] Connected to relay: {}'.format(self.local_redis))
+
+        self.done = False
 
     # Continually checks for results in the relay and batches them
     # Pushes every ms to the master (who knows why)
     def run(self):
+
         # Initialization: read exp and latest gen from master
         self.local_redis.set(EXP_KEY, retry_get(self.master_redis, EXP_KEY))
-        self._declare_gen_local(*retry_get(self.master_redis, (GEN_ID_KEY, GEN_DATA_KEY)))
+        gen_id, gen_data = retry_get(self.master_redis, (GEN_ID_KEY, GEN_DATA_KEY))
+        self._declare_gen_local(gen_id, gen_data)
 
         # Start subscribing to tasks
         p = self.master_redis.pubsub(ignore_subscribe_messages=True)
         p.subscribe(**{TASK_CHANNEL: lambda msg: self._declare_gen_local(*deserialize(msg['data']))})
-        p.run_in_thread(sleep_time=0.001)
-
+        subscription_thread = p.run_in_thread(sleep_time=0.001)
+        batch_sizes = []
+        last_print_time = time.time()
         while True:
+
+            # if self.done:
+            #     logger.info("[relay] Experiment finished. Closing relay.")
+            #     subscription_thread.stop()
+            #     p.close()
+            #     self.local_redis.flushdb()
+            #     break
+
             results = []
             start_time = curr_time = time.time()
             while curr_time - start_time < 0.001:
-                results.append(self.local_redis.blpop(RESULTS_KEY)[1])
+                popped = self.local_redis.blpop(RESULTS_KEY, timeout=0)
+                results.append(popped[1])
                 curr_time = time.time()
             #logger.info("Appending {} results from local redis to master redis".format(len(results)))
-            self.master_redis.rpush(RESULTS_KEY, *results)
+            if results:
+                self.master_redis.rpush(RESULTS_KEY, *results)
 
-        # Log
-        batch_sizes.append(len(results))
-        if curr_time - last_print_time > 5.0:
-            logger.info('[relay] Average batch size {:.3f}'.format(sum(batch_sizes) / len(batch_sizes)))
-            last_print_time = curr_time
+                # Log batch sizes
+                batch_sizes.append(len(results))
+                if curr_time - last_print_time > 5.0:
+                    logger.info('[relay] Average batch size {:.3f}'.format(sum(batch_sizes) / len(batch_sizes)))
+                    last_print_time = curr_time
+
+
 
     def _declare_gen_local(self, gen_id, gen_data):
         logger.info('[relay] Received task {}'.format(gen_id))
         self.local_redis.mset({GEN_ID_KEY: gen_id, GEN_DATA_KEY: gen_data})
+
+        ##self.done = deserialize(gen_data).done
 
     # def relay_noise_lists(self):
     #     self.master_redis.

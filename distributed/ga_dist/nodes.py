@@ -14,6 +14,12 @@ gym.undo_logger_setup()
 import policies, tf_util
 from collections import namedtuple
 import tf_util as U
+
+import subprocess
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 Task = namedtuple('Task', [])
 
 Config = namedtuple('Config', [
@@ -35,10 +41,8 @@ Result = namedtuple('Result', [
 
 
 
-Gen = namedtuple('Gen', ['noise_lists', 'timestep_limit'])
+Gen = namedtuple('Gen', ['done', 'noise_lists', 'timestep_limit'])
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 def make_session(single_threaded):
     import tensorflow as tf
     if not single_threaded:
@@ -66,7 +70,7 @@ class SharedNoiseTable(object):
 
 class Node:
     def __init__(self, node_id, n_workers, exp,
-                 master_host, master_port, relay_socket, master_pw):
+                 master_host, master_port, relay_socket, master_pw, log_dir):
 
         # Initialize networking
         self.master_port = master_port
@@ -79,11 +83,12 @@ class Node:
         self.relay_redis_cfg = {'unix_socket_path': relay_socket, 'db': 1, }
         self.master_redis_cfg = {'host': master_host, 'db': 0, 'password': master_pw}
         self.exp = exp
+        self.log_dir = log_dir
 
         # Relay client process
-        rcp = Process(target = RelayClient(self.master_redis_cfg,
+        self.rcp = Process(target = RelayClient(self.master_redis_cfg,
                                            self.relay_redis_cfg).run)
-        rcp.start()
+        self.rcp.start()
 
         # Initialize the experiments
         self.config = Config(**self.exp['config'])
@@ -96,9 +101,13 @@ class Node:
         # wouldn't necessarily give normally distributed samples!
 
         # Start worker processes
+        self.wps = []
         for i in range(self.n_workers):
-           wp = Process(target= self.worker_process)
-           wp.start()
+            wp = Process(target= self.worker_process)
+            self.wps.append(wp)
+            wp.start()
+
+
 
     def get_n_workers(self):
         raise NotImplementedError
@@ -119,18 +128,28 @@ class Node:
         rs = np.random.RandomState()
         worker_id = rs.randint(2 ** 31)
 
-        # Keep iterating through generations infinitely?
+        eps_done = 0
+
+        # Keep iterating until gen gets flagged
         while True:
             # Grab generation data
             gen_id, gen_data = wc.get_current_gen()
+
+            if gen_data.done:
+                if eps_done == 0 :
+                    raise ValueError("!!!Closed worker after 0 completed episodes!!!")
+                logger.info("Worker {} finished.".format(worker_id))
+                break
+
             assert isinstance(gen_id, int) and isinstance(gen_data, Gen)
-            ep_tstart = time.time()
+            assert isinstance(gen_data.noise_lists, list) and isinstance(gen_data.timestep_limit, int)
 
             # Prep for rollouts
             #noise_sublists, returns, lengths = [], [], []
-            eps_done = 0
-            # loop if the number of eps is
-            while eps_done <1 or time.time() - ep_tstart < self.config.min_gen_time:
+            cycle_tstart = time.time()
+            cycle_eps_done = 0
+
+            while cycle_eps_done <1 or time.time() - cycle_tstart < self.config.min_gen_time:
 
                 if len(gen_data.noise_lists) == 0:
 
@@ -166,82 +185,86 @@ class Node:
                 # rews_neg, len_neg = rollout_and_update_ob_stat(
                 #     policy, env, task_data.timestep_limit, rs, task_ob_stat, config.calc_obstat_prob)
                 eval_ret = np.sum(rewards)
-                duration = time.time() - ep_tstart
-                logger.info('Eval result: gen_id={} return={:.3f} length={} time = {}'.format(
+                duration = time.time() - cycle_tstart
+                logger.info('Eval result: gen_id={} return={:.3f} length={} cycle_time = {}'.format(
                     gen_id, eval_ret, length, duration))
                 wc.push_result(gen_id, Result(worker_id, noise_list, eval_ret, length, duration))
-                eps_done += 1
+                cycle_eps_done += 1
 
-                # This helps to debug
-                # can be left in anyway
-                if eps_done >=self.config.episodes_per_batch:
-                    logger.info("Worker {} finished more episodes than required in total for this batch. Stopping.".format(worker_id))
-                    break
+                # # This helps to debug
+                # # can be left in anyway
+                # if cycle_eps_done >= self.config.episodes_per_batch:
+                #     logger.info(
+                #         "Worker {} finished more episodes than required in total for this batch. Stopping.".format(
+                #             worker_id))
+                #     break
+
+            eps_done += cycle_eps_done
 
 # The master node also has worker processes
 class MasterNode(Node):
     def __init__(self, node_id, n_workers, exp,
-                 master_host, master_port, relay_socket, master_pw):
+                 master_host, master_port, relay_socket, master_pw, log_dir):
 
         # Initialize networking
         super().__init__(node_id, n_workers, exp,
-                         master_host, master_port, relay_socket, master_pw)
+                         master_host, master_port, relay_socket, master_pw, log_dir)
         logger.info("Node {} contains the master client.".format(self.node_id))
         self.master_client = MasterClient(self.master_redis_cfg)
-        self.cluster_n_workers = self.config.n_nodes*(self.n_workers+1)-1
+        self.log_quantities = ['EpRetMax', 'EpRetParentMin', 'EpRetUQ', 'EpRetMed', 'EpRetLQ', 'EpRetMin',
+                               'EpLenMax', 'EpLenUQ', 'EpLenMed', 'EpLenLQ', 'EpLenMin',
+                               "EpisodesSoFar", "TimestepsThisIter", "TimestepsSoFar",
+                               "UniqueWorkers", "UniqueWorkersFrac", "WorkerEpsMax", "WorkerEpsUQ", "WorkerEpsMed",
+                               "WorkerEpsLQ", "WorkerEpsMin",
+                               "ResultsSkippedFrac",
+                               "TimeElapsedThisIter", "TimeElapsed",
+                               "TopGenome"]
 
-        # TODO think about separate populations to increase CPU utilisation
-        #for i in range(len(self.node_list)):
-        #    self.master_client.redis.set('noise-lists-{}'.format(i), noise_lists)
+    def begin_exp(self):
 
-    def begin_exp(self, log_dir):
-
-        exp_tstart = time.time()
-        noise_lists = []
-        self.master_client.declare_experiment(self.exp)
         import tabular_logger as tlogger
-        logger.info('Tabular logging to {}'.format(log_dir))
-        tlogger.start(log_dir)
 
-        fieldnames = ['EpRetMax', 'EpRetParentMin', 'EpRetUQ', 'EpRetMed', 'EpRetLQ', 'EpRetMin',
-         'EpLenMax', 'EpLenUQ', 'EpLenMed', 'EpLenLQ', 'EpLenMin',
-         "EpisodesSoFar", "TimestepsThisIter", "TimestepsSoFar",
-         "UniqueWorkers", "UniqueWorkersFrac", "WorkerEpsMax", "WorkerEpsUQ", "WorkerEpsMed", "WorkerEpsLQ",
-         "WorkerEpsMin",
-         "ResultsSkippedFrac",
-         "TimeElapsedThisIter", "TimeElapsed",
-         ]
-        with open(log_dir+"/"+csv_log_file, 'wb') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+        # Logging files! Very important!
+        year, month, day, hour, min, sec = time.localtime()[:6]
+        #log_folder = "deepmind-{}.{}.{}:{}:{}.{}-{}-{}".format(self.exp['env_id'], self.n_workers, hour, min, sec, day, month, year)
+        csv_log_path = os.path.join(self.log_dir, "log.csv")
+        tab_log_path = os.path.join(self.log_dir)
+        logger.info('Tabular logging to {}/log.txt'.format(tab_log_path))
+        logger.info('csv logging to {}'.format(csv_log_path))
+        tlogger.start(tab_log_path)
+        with open(csv_log_path, 'w') as f:
+            writer = csv.DictWriter(f, fieldnames=self.log_quantities)
             writer.writeheader()
 
-
+        # Prepare for experiment
+        exp_tstart = time.time()
+        self.master_client.declare_experiment(self.exp)
+        noise_lists = []
         tstep_lim = self.config.init_tstep_limit
         n_exp_eps, n_exp_steps = 0, 0
-
-        env = wrap_deepmind(make_atari(self.exp['env_id']), frame_stack=True, scale=True, episode_life=False, clip_rewards=False)
         sess = make_session(single_threaded=True)
-        policy_class = getattr(policies, self.exp['policy']['type'])
-        policy = policy_class(env.observation_space,
-                              env.action_space,
-                              **self.exp['policy']['args'])
+        #env = wrap_deepmind(make_atari(self.exp['env_id']), frame_stack=True, scale=True, episode_life=False, clip_rewards=False)
+        #policy_class = getattr(policies, self.exp['policy']['type'])
+        #policy = policy_class(env.observation_space, env.action_space, **self.exp['policy']['args'])
         tf_util.initialize()
+
         # Iterate over generations
         for gen_num in range(self.config.n_gens):
 
-            #print("Before declaring gen there are {} items on the queue.".format(self.master_client.master_redis.llen(RESULTS_KEY)))
-            # Declare the gen
             gen_id = self.master_client.declare_gen(
-                Gen(noise_lists=noise_lists,
+                Gen(done=False,
+                    noise_lists=noise_lists,
                     timestep_limit=self.config.init_tstep_limit))
+
             # Count the number on the queue immediately after declaring the generation
             gen_start_queue_size = self.master_client.master_redis.llen(RESULTS_KEY)
             # We shouldn't get more than this number of bad episodes
             gen_tstart = time.time()
+
             # Prep for new gen results
             n_gen_eps, n_gen_steps, \
             n_bad_eps, n_bad_steps, bad_time  = 0, 0, 0, 0, 0
-            results, returns, lens, noise_lists = [], [], [], []
+            results, returns, lens, mut_noise_lists = [], [], [], []
             worker_eps = {}
             # Keep collecting results until we reach BOTH thresholds
             while n_gen_eps < self.config.episodes_per_batch or \
@@ -258,7 +281,7 @@ class MasterNode(Node):
                     n_gen_eps += 1
 
                     n_gen_steps += r.len
-                    noise_lists.append(r.noise_list)
+                    mut_noise_lists.append(r.noise_list)
                     returns.append(r.ret)
                     lens.append(r.len)
                     n_exp_eps +=1
@@ -272,8 +295,6 @@ class MasterNode(Node):
             # All other nodes are now wasting compute for master from here!
 
             # Determine if the timestep limit needs to be increased
-
-            # Update number of steps to take
             if self.config.adaptive_tstep_lim and \
                     np.mean(lens==tstep_lim) > self.config.tstep_maxing_thresh:
                 old_tslimit = tslimit
@@ -285,7 +306,7 @@ class MasterNode(Node):
             # set the noise list ready for next iter
             order = sorted(range(n_gen_eps), key = lambda x: returns[x])
             parent_idxs = order[-int(self.config.trunc_frac*self.config.episodes_per_batch):]
-            noise_lists = [noise_lists[parent_idx] for parent_idx in parent_idxs]
+            noise_lists = [mut_noise_lists[parent_idx] for parent_idx in parent_idxs]
 
             # Compute the skip fraction
             skip_frac = n_bad_eps / n_gen_eps
@@ -296,84 +317,85 @@ class MasterNode(Node):
             # stop the clock
             gen_tend = time.time()
 
-            # Reward distribution
-            tlogger.record_tabular("EpRetMax", np.nan if not returns else np.max(returns))
-            tlogger.record_tabular("EpRetMinParent", np.nan if not returns else returns[parent_idxs[0]])
+            # Write the logs
+            log_dict = self.get_log_dict(returns, parent_idxs, lens, n_exp_eps, n_gen_steps, n_exp_steps,
+                     worker_eps, gen_tend, exp_tstart, gen_tstart, noise_lists, skip_frac)
+            self.tabular_log_append(log_dict, tlogger)
+            self.csv_log_append(log_dict, csv_log_path)
 
-            tlogger.record_tabular("EpRetUQ", np.nan if not returns else np.percentile(returns, 75))
-            tlogger.record_tabular("EpRetMed", np.nan if not returns else np.median(returns))
-            tlogger.record_tabular("EpRetLQ", np.nan if not returns else np.percentile(returns, 25))
-            tlogger.record_tabular("EpRetMin", np.nan if not returns else np.min(returns))
+        if "SLURM_JOB_ID" in os.environ:
+            logger.info("Running on cluster. All generations finished. Declaring experiment end. SLURM_JOB_ID = {}".format(os.environ["SLURM_JOB_ID"]))
+            subprocess.call("scancel {}".format(os.environ["SLURM_JOB_ID"]), shell=True)
+        else:
+            logger.info("Running on login nodes. All generations finished. Declaring experiment end. ")
+        # # declare a 'done' gen
+        # # TODO replace this with a proper flag
+        # self.master_client.declare_gen(
+        #     Gen(done=True,
+        #         noise_lists=None,
+        #         timestep_limit=None))
 
-            # Ep len distribution
-            tlogger.record_tabular("EpLenMax", np.nan if not lens else np.max(lens))
-            tlogger.record_tabular("EpLenUQ", np.nan if not lens else np.percentile(lens, 75))
-            tlogger.record_tabular("EpLenMed", np.nan if not lens else np.median(lens))
-            tlogger.record_tabular("EpLenLQ", np.nan if not lens else np.percentile(lens, 25))
-            tlogger.record_tabular("EpLenMin", np.nan if not lens else np.min(lens))
+        # Wait for everything else to close
+        # for wp in self.wps:
+        #     wp.join()
+        # self.rcp.join()
+        # subprocess.call("tmux kill-session redis-master", shell=True)
+        #
+        # logger.info("Node {} (master) has joined all local processes. You may still have to wait for other nodes to close.".format(self.node_id))
 
-            # tlogger.record_tabular("EvalPopRank", np.nan if not returns else (
-            #         np.searchsorted(np.sort(returns_n2.ravel()), returns).mean() / returns_n2.size))
-            tlogger.record_tabular("EpCount", n_gen_eps)
+    def tabular_log_append(self, log_dict, tlogger):
 
-            # Parent reward distribution
+        for quantity, value in log_dict.items():
+            if not isinstance(value, str):
+                tlogger.record_tabular(quantity, value)
+        tlogger.dump_tabular()
 
-            #tlogger.record_tabular("Norm", float(np.square(policy.get_trainable_flat()).sum()))
+    def csv_log_append(self, log_dict, csv_log_path):
+        with open(csv_log_path, 'a') as f:
+            writer = csv.DictWriter(f, fieldnames=self.log_quantities)
+            writer.writerow(log_dict)
 
-            #tlogger.record_tabular("EpisodesThisIter", n_gen_eps)
-            tlogger.record_tabular("EpisodesSoFar", n_exp_eps)
-            tlogger.record_tabular("TimestepsThisIter", n_gen_steps)
-            tlogger.record_tabular("TimestepsSoFar", n_exp_steps)
+    def get_log_dict(self, returns, parent_idxs, lens, n_exp_eps, n_gen_steps, n_exp_steps,
+                     worker_eps, gen_tend, exp_tstart, gen_tstart, noise_lists, skip_frac):
 
-            num_unique_workers = len(worker_eps.keys())
-            weps = np.asarray([x for x in worker_eps.values()])
-            tlogger.record_tabular("UniqueWorkers", num_unique_workers)
-            tlogger.record_tabular("UniqueWorkersFrac", num_unique_workers / np.sum(weps))
-            tlogger.record_tabular("WorkerEpsMax", np.max(weps))
-            tlogger.record_tabular("WorkerEpsUQ", np.percentile(weps, 75))
-            tlogger.record_tabular("WorkerEpsMed", np.median(weps))
-            tlogger.record_tabular("WorkerEpsLQ", np.percentile(weps,25))
-            tlogger.record_tabular("WorkerEpsMin", np.min(weps))
+        num_unique_workers = len(worker_eps.keys())
+        weps = np.asarray([x for x in worker_eps.values()])
+        return \
+        {"EpRetMax": np.nan if not returns else np.max(returns),
+         "EpRetParentMin": np.nan if not returns else returns[parent_idxs[0]],
+         "EpRetUQ": np.nan if not returns else np.percentile(returns, 75),
+         "EpRetMed": np.nan if not returns else np.median(returns),
+         "EpRetLQ": np.nan if not returns else np.percentile(returns, 25),
+         "EpRetMin": np.nan if not returns else np.min(returns),
 
-            tlogger.record_tabular("ResultsSkippedFrac", skip_frac)
-            #tlogger.record_tabular("ObCount", ob_count_this_batch)
+         "EpLenMax": np.nan if not lens else np.max(lens),
+         "EpLenUQ": np.nan if not lens else np.percentile(lens, 75),
+         "EpLenMed": np.nan if not lens else np.median(lens),
+         "EpLenLQ": np.nan if not lens else np.percentile(lens, 25),
+         "EpLenMin": np.nan if not lens else np.min(lens),
 
-            tlogger.record_tabular("TimeElapsedThisIter", gen_tend - gen_tstart)
-            tlogger.record_tabular("TimeElapsed", gen_tend - exp_tstart)
-            tlogger.dump_tabular()
+         "EpisodesSoFar": n_exp_eps,
+         "TimestepsThisIter": n_gen_steps,
+         "TimestepsSoFar": n_exp_steps,
 
-            with open(log_dir+"/"+csv_log_file, 'a') as csvfile:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writerow({"EpRetMax": np.max(returns),
-                                 "EpRetParentMin": returns[parent_idxs[0]],
-                                 "EpRetUQ": np.percentile(returns, 75),
-                                 "EpRetMed": np.median(returns),
-                                 "EpRetLQ": np.percentile(returns, 25),
-                                 "EpRetMin": np.min(returns),
+         "UniqueWorkers": num_unique_workers,
+         "UniqueWorkersFrac": num_unique_workers / np.sum(weps),
+         "WorkerEpsMax": np.max(weps),
+         "WorkerEpsUQ": np.percentile(weps, 75),
+         "WorkerEpsMed": np.median(weps),
+         "WorkerEpsLQ": np.percentile(weps, 25),
+         "WorkerEpsMin": np.min(weps),
 
-                                 "EpLenMax": np.nan if not lens else np.max(lens),
-                                 "EpLenUQ": np.nan if not lens else np.percentile(lens,75),
-                                 "EpLenMed": np.nan if not lens else np.median(lens),
-                                 "EpLenLQ": np.nan if not lens else np.percentile(lens,25),
-                                 "EpLenMin": np.nan if not lens else np.min(lens),
+         "ResultsSkippedFrac": skip_frac,
+         "TimeElapsedThisIter": gen_tend - gen_tstart,
+         "TimeElapsed": gen_tend - exp_tstart,
 
-                                 "EpCount": n_gen_eps,
-                                 "EpisodesSoFar": n_exp_eps,
-                                 "TimeStepsThisIter": n_gen_steps,
-                                 "TimestepsSoFar": n_exp_steps,
-
-                                 "UniqueWorkers": num_unique_workers),
-                                "UniqueWorkersFrac": num_unique_workers / np.sum(weps),
-                                "WorkerEpsMax": np.max(weps),
-                                "WorkerEpsUQ": np.percentile(weps, 75),
-                                "WorkerEpsMed": np.median(weps),
-                                "WorkerEpsLQ": np.percentile(weps, 25),
-                                "WorkerEpsMin": np.min(weps)}
-
+         "TopGenome": "-".join(map(str, noise_lists[-1]))}
 
     def get_n_workers(self):
         if self.n_workers:
-            return self.n_workers
+            assert os.cpu_count - 2 >= self.n_workers
+            return min(os.cpu_count() - 2, self.n_workers)
         else:
             return os.cpu_count() - 2
 
@@ -383,17 +405,26 @@ class MasterNode(Node):
 
 class WorkerNode(Node):
     def __init__(self, node_id, n_workers, exp,
-                 master_host, master_port, relay_socket, master_pw):
+                 master_host, master_port, relay_socket, master_pw, log_dir):
         super().__init__(node_id, n_workers, exp,
-                         master_host, master_port, relay_socket, master_pw)
+                         master_host, master_port, relay_socket, master_pw, log_dir)
 
         logger.info("Node {} is a worker node".format(self.node_id))
         assert n_workers <= os.cpu_count()
         self.n_workers = n_workers if n_workers else os.cpu_count() -1
 
+        # for wp in self.wps:
+        #     wp.join()
+        # self.rcp.join()
+        #
+        # subprocess.call("tmux kill-session redis-relay", shell=True)
+        #
+        # logger.info("Node {} has joined all processes. Experiment finished.".format(self.node_id))
+
     def get_n_workers(self):
         if self.n_workers:
-            return self.n_workers
+            assert os.cpu_count - 1 >= self.n_workers
+            return min(self.n_workers, os.cpu_count()-1)
         else:
             return os.cpu_count() - 1
 
