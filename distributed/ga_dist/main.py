@@ -8,14 +8,72 @@ from clients import MasterClient, RelayClient, WorkerClient
 import argparse
 import os
 import subprocess
-
+import re
+import gym
 
 import socket
 hostname = socket.gethostname()
 
 def _parse_node_list(node_list):
     return hostlist.expand_hostlist(node_list)
-
+ATARI_ENV_IDS = [
+    "AlienNoFrameskip-v4",
+    "AmidarNoFrameskip-v4",
+    "AssaultNoFrameskip-v4",
+    "AsterixNoFrameskip-v4",
+    "AsteroidsNoFrameskip-v4",
+    "AtlantisNoFrameskip-v4",
+    "BankHeistNoFrameskip-v4",
+    "BattleZoneNoFrameskip-v4",
+    "BeamRiderNoFrameskip-v4",
+    "BerzerkNoFrameskip-v4",
+    "BowlingNoFrameskip-v4",
+    "BoxingNoFrameskip-v4",
+    "BreakoutNoFrameskip-v4",
+    "CentipedeNoFrameskip-v4",
+    "ChopperCommandNoFrameskip-v4",
+    "CrazyClimberNoFrameskip-v4",
+    "-",
+    "DemonAttackNoFrameskip-v4",
+    "DoubleDunkNoFrameskip-v4",
+    "EnduroNoFrameskip-v4",
+    "FishingDerbyNoFrameskip-v4",
+    "FreewayNoFrameskip-v4",
+    "FrostbiteNoFrameskip-v4",
+    "GopherNoFrameskip-v4",
+    "GravitarNoFrameskip-v4",
+    "HeroNoFrameskip-v4",
+    "IceHockeyNoFrameskip-v4",
+    "JamesbondNoFrameskip-v4",
+    "KangarooNoFrameskip-v4",
+    "KrullNoFrameskip-v4",
+    "KungFuMasterNoFrameskip-v4",
+    "MontezumaRevengeNoFrameskip-v4",
+    "MsPacmanNoFrameskip-v4",
+    "NameThisGameNoFrameskip-v4",
+    "PhoenixNoFrameskip-v4",
+    "PitfallNoFrameskip-v4",
+    "PongNoFrameskip-v4",
+    "PrivateEyeNoFrameskip-v4",
+    "QbertNoFrameskip-v4",
+    "RiverraidNoFrameskip-v4",
+    "RoadRunnerNoFrameskip-v4",
+    "RobotankNoFrameskip-v4",
+    "SeaquestNoFrameskip-v4",
+    "SkiingNoFrameskip-v4",
+    "SolarisNoFrameskip-v4",
+    "SpaceInvadersNoFrameskip-v4",
+    "StarGunnerNoFrameskip-v4",
+    "-",
+    "TennisNoFrameskip-v4",
+    "TimePilotNoFrameskip-v4",
+    "TutankhamNoFrameskip-v4",
+    "UpNDownNoFrameskip-v4",
+    "VentureNoFrameskip-v4",
+    "VideoPinballNoFrameskip-v4",
+    "WizardOfWorNoFrameskip-v4",
+    "YarsRevengeNoFrameskip-v4",
+    "ZaxxonNoFrameskip-v4",]
 
 if __name__ == "__main__":
 
@@ -36,9 +94,6 @@ if __name__ == "__main__":
         node_name, node_id, node_list
     ))
 
-
-
-
     if node_id==0:
         cp = subprocess.run("tmux new -s redis-master -d", shell=True)
         cp = subprocess.run("tmux send-keys -t redis-master \"redis-server redis_config/redis_master.conf\" C-m", shell=True)
@@ -53,13 +108,14 @@ if __name__ == "__main__":
     logger.debug(cp.stdout)
     logger.debug(cp.stderr)
 
-
     # Load the experiment from file
-    logger.info("working dir: {}".format(os.getcwd()))
-    with open("configurations/skiing.json", 'r') as f:
+    array_id = os.environ["SLURM_ARRAY_TASK_ID"]
+    with open(args.config, 'r') as f:
         exp_config = json.loads(f.read())
+        exp_config["env_id"] = ATARI_ENV_IDS[array_id]
+    logger.info("Starting GA. array_id = {}, env_id = {}".format(array_id, exp_config["env_id"]))
 
-
+    env_log_dir = os.path.join(args.log, exp_config["env_id"])
 
     if node_id==0:
         # This node contains the master
@@ -71,7 +127,7 @@ if __name__ == "__main__":
             master_port=6379,
             relay_socket='/tmp/es_redis_relay.sock',
             master_pw= "deepbrickwindowattack",
-            log_dir=args.log)
+            log_dir=env_log_dir)
         master_node.begin_exp()
 
     else:
@@ -83,7 +139,7 @@ if __name__ == "__main__":
                           master_port=6379,
                           relay_socket='/tmp/es_redis_relay.sock',
                           master_pw= "deepbrickwindowattack",
-                          log_dir=args.log)
+                          log_dir=env_log_dir)
         logger.info("Node {} joining server.".format(node_id))
 
     print("Node {} done!".format(node_id))

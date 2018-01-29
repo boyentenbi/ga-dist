@@ -205,7 +205,6 @@ class WorkerClient:
 
     def get_current_gen(self):
 
-
         with self.local_redis.pipeline() as p:
             while True:
                 try:
