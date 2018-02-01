@@ -27,7 +27,7 @@ Config = namedtuple('Config', [
     'l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
     'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
     'return_proc_mode', 'episode_cutoff_mode', "adaptive_tstep_lim", 'tstep_lim_incr_ratio',
-    'trunc_frac', 'tstep_maxing_thresh', 'n_noise'
+    'trunc_frac', 'tstep_maxing_thresh', 'n_noise', "n_tsteps"
 ])
 
 Result = namedtuple('Result', [
@@ -225,7 +225,7 @@ class MasterNode(Node):
         import tabular_logger as tlogger
 
         # Logging files! Very important!
-        year, month, day, hour, min, sec = time.localtime()[:6]
+        #year, month, day, hour, min, sec = time.localtime()[:6]
         #log_folder = "deepmind-{}.{}.{}:{}:{}.{}-{}-{}".format(self.exp['env_id'], self.n_workers, hour, min, sec, day, month, year)
         csv_log_path = os.path.join(self.log_dir, "log.csv")
         tab_log_path = os.path.join(self.log_dir)
@@ -241,15 +241,15 @@ class MasterNode(Node):
         self.master_client.declare_experiment(self.exp)
         noise_lists = []
         tstep_lim = self.config.init_tstep_limit
-        n_exp_eps, n_exp_steps = 0, 0
-        sess = make_session(single_threaded=True)
+        n_exp_gens, n_exp_eps, n_exp_steps = 0, 0, 0
+        sess = make_session(single_threaded=True) # don't comment me out!
         #env = wrap_deepmind(make_atari(self.exp['env_id']), frame_stack=True, scale=True, episode_life=False, clip_rewards=False)
         #policy_class = getattr(policies, self.exp['policy']['type'])
         #policy = policy_class(env.observation_space, env.action_space, **self.exp['policy']['args'])
         tf_util.initialize()
 
         # Iterate over generations
-        for gen_num in range(self.config.n_gens):
+        while n_exp_steps < self.config.n_tsteps:
 
             gen_id = self.master_client.declare_gen(
                 Gen(done=False,
@@ -294,6 +294,8 @@ class MasterNode(Node):
                 logger.info("n_gen_eps = {}, n_bad_eps = {}".format(n_gen_eps, n_bad_eps))
             # All other nodes are now wasting compute for master from here!
 
+            n_exp_gens += 1
+
             # Determine if the timestep limit needs to be increased
             if self.config.adaptive_tstep_lim and \
                     np.mean(lens==tstep_lim) > self.config.tstep_maxing_thresh:
@@ -322,12 +324,12 @@ class MasterNode(Node):
                      worker_eps, gen_tend, exp_tstart, gen_tstart, noise_lists, skip_frac)
             self.tabular_log_append(log_dict, tlogger)
             self.csv_log_append(log_dict, csv_log_path)
-
+        logger.info("Finished {} generations in {} timesteps.".format(n_exp_gens, n_exp_steps))
         if "SLURM_JOB_ID" in os.environ:
-            logger.info("Running on cluster. All generations finished. Declaring experiment end. SLURM_JOB_ID = {}".format(os.environ["SLURM_JOB_ID"]))
+            logger.info("Running on cluster. Declaring experiment end. SLURM_JOB_ID = {}".format(os.environ["SLURM_JOB_ID"]))
             subprocess.call("scancel {}".format(os.environ["SLURM_JOB_ID"]), shell=True)
         else:
-            logger.info("Running on login nodes. All generations finished. Declaring experiment end. ")
+            logger.info("Running on login node(s). Experiment finished. ")
         # # declare a 'done' gen
         # # TODO replace this with a proper flag
         # self.master_client.declare_gen(
