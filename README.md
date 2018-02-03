@@ -1,7 +1,7 @@
 # ga-dist
 Distributed truncation selection running on Cambridge's Peta4 cluster, applied to meta learning.
 
-Foked from Salimans et al https://github.com/openai/evolution-strategies-starter to use truncation selection instead of evolution strategies, and to run on the Peta4 CPU cluster instead of AWS. 
+Forked from Salimans et al https://github.com/openai/evolution-strategies-starter to use truncation selection instead of evolution strategies, and to run on the Peta4 CPU cluster instead of AWS. 
 
 Also uses `gym`, `roboschool`, `redis`.
 
