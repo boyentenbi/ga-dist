@@ -41,3 +41,11 @@ Briefly waiting for cluster changes to perform roboschool experiments.
 
 GA-MAML on ant meta-task!
 
+# Stuff I've learned
+
+* Networking networking networking. How to use a Unix domain socket, TCP vs UDP. I still need to work on this though.
+* Writing asynchronous code. How to spawn processes, how to use Queues to handle asynchronous communication. 
+* Arg parsing
+* How a high-performance compute resource manager like SLURM works
+* Proper use of a step-through debugger!
+
