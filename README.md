@@ -9,7 +9,7 @@ Forked from Salimans et al https://github.com/openai/evolution-strategies-starte
 
 Also uses `gym`, `roboschool`, `redis`.
 
-# Explanation
+# Code explanation
 
 Use `launch_multi.py` to launch several experiments with different random seeds and environments. A ~1bn timestep run of one Atari env takes approximately 1280 core-hours. This calls `sbatch slurm_python.peta4`.
 
