@@ -16,6 +16,7 @@ Also uses `gym`, `roboschool`, `redis`.
 * Arg parsing
 * How a high-performance compute resource manager like SLURM works
 * Proper use of a step-through debugger!
+* Practicing OO design
 
 # Code explanation
 
