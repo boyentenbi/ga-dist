@@ -9,6 +9,14 @@ Forked from Salimans et al https://github.com/openai/evolution-strategies-starte
 
 Also uses `gym`, `roboschool`, `redis`.
 
+# Stuff I've learned
+
+* Networking networking networking. How to use a Unix domain socket, TCP vs UDP. I still need to work on this though.
+* Writing asynchronous code. How to spawn processes, how to use Queues to handle asynchronous communication. 
+* Arg parsing
+* How a high-performance compute resource manager like SLURM works
+* Proper use of a step-through debugger!
+
 # Code explanation
 
 Use `launch_multi.py` to launch several experiments with different random seeds and environments. A ~1bn timestep run of one Atari env takes approximately 1280 core-hours. This calls `sbatch slurm_python.peta4`.
@@ -40,12 +48,4 @@ Wall-clock-time vs. core-number scaling tests.
 Briefly waiting for cluster changes to perform roboschool experiments.
 
 GA-MAML on ant meta-task!
-
-# Stuff I've learned
-
-* Networking networking networking. How to use a Unix domain socket, TCP vs UDP. I still need to work on this though.
-* Writing asynchronous code. How to spawn processes, how to use Queues to handle asynchronous communication. 
-* Arg parsing
-* How a high-performance compute resource manager like SLURM works
-* Proper use of a step-through debugger!
 
