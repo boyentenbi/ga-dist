@@ -38,7 +38,9 @@ Added compatibility for Atari environments (DeepMind configuration).
 
 Added more logging and inspection notebooks.
 
-Can now successfully run many experiments at once on the Peta4 cluster!
+Successful Atari run on 256 cores:
+
+
 
 # Next steps
 
