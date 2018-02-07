@@ -42,11 +42,13 @@ Can now successfully run many experiments at once on the Peta4 cluster!
 
 # Next steps
 
-Full run of 11 Atari games (10 seeds each).
+Full run of 11 Atari games (at least 10 seeds each).
 
 Wall-clock-time vs. core-number scaling tests.
 
 Briefly waiting for cluster changes to perform roboschool experiments.
 
-GA-MAML on ant meta-task!
+GA-MAML on ant meta-task
+
+Multi-episode environment with alternating rollouts and learned updates
 
