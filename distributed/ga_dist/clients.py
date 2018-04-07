@@ -172,7 +172,7 @@ class RelayClient:
                 # Log batch sizes
                 batch_sizes.append(len(results))
                 if curr_time - last_print_time > 5.0:
-                    logger.info('[relay] Average batch size {:.3f}'.format(sum(batch_sizes) / len(batch_sizes)))
+                    logger.debug('[relay] Average batch size {:.3f}'.format(sum(batch_sizes) / len(batch_sizes)))
                     last_print_time = curr_time
 
 

@@ -21,7 +21,7 @@
 #! The skylake/skylake-himem nodes have 32 CPUs (cores) each.
 #SBATCH --ntasks=256
 #! How much wallclock time will be required?
-#SBATCH --time=05:00:00
+#SBATCH --time=10:00:00
 #! What types of email messages do you wish to receive?
 #SBATCH --mail-type=FAIL
 #! Uncomment this to prevent the job from being requeued (e.g. if
@@ -66,7 +66,7 @@ source activate ga
 application="python ga_dist/main.py"
 
 #! Run options for the application:
-options=""
+options="--env_id $env_id --super_exp_id $super_exp_id --global_seed $global_seed"
 
 #! Work directory (i.e. where the job will run):
 workdir="/home/pc517/ga-dist/distributed"  # The value of SLURM_SUBMIT_DIR sets workdir to the directory
@@ -137,12 +137,12 @@ echo -e "\nExecuting command:\n==================\n$CMD\n"
 # we want N nodes
 # there are n tasks
 
-log_dir="logs/$super_exp_id/$env_id"
+log_dir="logs/$super_exp_id/$env_id/$global_seed"
 for ((c=0; c<=($numnodes-1); c++));
 do
     err_file="$log_dir/err"
     out_file="$log_dir/out"
-    srun --cpus-per-task=32 --exclusive -N 1 -n 1 $application > $out_file 2> $err_file &
+    srun --cpus-per-task=32 --exclusive -N 1 -n 1 $application $options > $out_file 2> $err_file &
 done
 
 wait

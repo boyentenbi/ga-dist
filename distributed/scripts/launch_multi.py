@@ -62,14 +62,15 @@ ATARI_ENV_IDS = [
     "YarsRevengeNoFrameskip-v4",
     "ZaxxonNoFrameskip-v4",]
 
-super_exp_id = str(int(time.time()))
-games = ["SkiingNoFrameskip-v4", "FrostbiteNoFrameskip-v4"]
+super_exp_id = time.strftime("%Y:%m:%d-%H:%M:%S")
+games = ["FrostbiteNoFrameskip-v4"]
 n_games = len(games)
+n_seeds = 5
 rnd = np.random.randint(2**31)
 
-print("This will launch {} jobs for 5 hours on 8 nodes each.".format(n_games))
-print("This will cost you a maximum of {} core-hours".format(40*32*n_games))
-if not input("Is your atari config file correct? y/n:")=="y":
+print("This will launch {} jobs for 10 hours on 8 nodes each.".format(n_games * n_seeds))
+print("This will cost you a maximum of {} core-hours".format(80*32*n_games*n_seeds))
+if not input("Is your config file correct? y/n:")=="y":
     exit()
 if not input("Is the number of hours and nodes and tasks set correctly in your slurm script? y/n:")=="y":
     exit()
@@ -81,10 +82,14 @@ if x == str(rnd):
     os.mkdir(os.path.join("logs", super_exp_id))
     for env_id in games:
         if not env_id =="-":
-            new_shell_env = os.environ.copy()
-            new_shell_env["env_id"]=env_id
             os.mkdir(os.path.join("logs", super_exp_id, env_id))
-            subprocess.run("sbatch slurm/slurm_python_single.peta4".split(),env=new_shell_env)
+
+            for seed in range(n_seeds):
+                os.mkdir(os.path.join("logs", super_exp_id, env_id, str(seed)))
+                new_shell_env = os.environ.copy()
+                new_shell_env["global_seed"]=str(seed)
+                new_shell_env["env_id"]=env_id
+                subprocess.run("sbatch slurm/slurm_python_single.peta4".split(),env=new_shell_env)
 
 else:
     print("Closing...")

@@ -18,7 +18,7 @@
     "adaptive_tstep_lim": false,
     "tstep_maxing_thresh": 0.5,
     "tstep_lim_incr_ratio": 1.1,
-    "trunc_frac": 0.002
+    "n_parents": 0.002
   },
   "env_id": "SkiingNoFrameskip-v4",
   "exp_prefix": "humanoid",

@@ -21,14 +21,14 @@ class Policy:
         self._setfromflat = U.SetFromFlat(self.trainable_variables)
         self._getflat = U.GetFlat(self.trainable_variables)
 
-        # logger.info('Trainable variables ({} parameters)'.format(self.num_params))
-        # for v in self.trainable_variables:
-        #     shp = v.get_shape().as_list()
-        #     logger.info('- {} shape:{} size:{}'.format(v.name, shp, np.prod(shp)))
-        # logger.info('All variables')
-        # for v in self.all_variables:
-        #     shp = v.get_shape().as_list()
-        #     logger.info('- {} shape:{} size:{}'.format(v.name, shp, np.prod(shp)))
+        logger.debug('Trainable variables ({} parameters)'.format(self.num_params))
+        for v in self.trainable_variables:
+            shp = v.get_shape().as_list()
+            logger.debug('- {} shape:{} size:{}'.format(v.name, shp, np.prod(shp)))
+        logger.debug('All variables')
+        for v in self.all_variables:
+            shp = v.get_shape().as_list()
+            logger.debug('- {} shape:{} size:{}'.format(v.name, shp, np.prod(shp)))
 
         placeholders = [tf.placeholder(v.value().dtype, v.get_shape().as_list()) for v in self.all_variables]
         self.set_all_vars = U.function(
@@ -71,24 +71,22 @@ class Policy:
         timestep_limit = env_timestep_limit if timestep_limit is None else min(timestep_limit, env_timestep_limit)
         #logger.info("rolling out with timestep limit of {}".format(timestep_limit))
         rews = []
-        t = 0
         if save_obs:
             obs = []
         ob = env.reset()
-        for _ in range(timestep_limit):
+        for t in range(1,timestep_limit+1):
             ac = self.act(np.expand_dims(ob, 0), random_stream=random_stream)
             if save_obs:
                 obs.append(ob)
             ob, rew, done, _ = env.step(ac)
             rews.append(rew)
-            t += 1
             if render:
                 env.render()
             if done:
                 break
         rews = np.array(rews, dtype=np.float32)
         if save_obs:
-            return rews, t, np.array(obs)
+            return rews, t, obs
         return rews, t
 
     def act(self, ob, random_stream=None):
@@ -108,7 +106,7 @@ class Policy:
         raise NotImplementedError
 
     # YOU NEED THE SHAPE TO DO THE GLOROT!
-    def init_from_noise_idxs(self, samples, glorot_std = 1.):  # pylint: disable=W0613
+    def init_from_noise_idxs(self, samples, glorot_std):  # pylint: disable=W0613
         inits = np.zeros([self.num_params])
         i = 0
         for v in self.trainable_variables:
@@ -437,7 +435,7 @@ class AtariPolicy(Policy):
         assert len(kernel_sizes)==len(strides)==len(n_channels)
 
         assert len(ob_space.shape) == 3
-        assert len(self.ac_space.shape) == 1
+        assert len(self.ac_space.shape) == 0
         # assert np.all(np.isfinite(self.ac_space.low)) and np.all(np.isfinite(self.ac_space.high)), \
         #     'Action bounds required'
 
@@ -471,24 +469,22 @@ class AtariPolicy(Policy):
         x = o
 
         for iconv, kernel_size, stride, channel_dim in zip(range(len(self.kernel_sizes)), self.kernel_sizes, self.strides, self.n_channels):
-            x = tf.layers.conv2d(x, channel_dim, kernel_size, stride, name="conv{}".format(iconv))
+            x = tf.layers.conv2d(x, channel_dim, kernel_size, stride, padding="SAME", name="conv{}".format(iconv))
 
-        y = tf.contrib.layers.flatten(x)
+        y = U.flattenallbut0(x)
 
         for ihidden, n_hidden in enumerate(self.hidden_dims):
             y = tf.layers.dense(y, n_hidden, self.nonlin, 'h{}'.format(ihidden))
 
         # Map to action
-        a_dim = self.ac_space.shape[0]
-        a = tf.layers.dense(y, a_dim, tf.nn.softmax)
+        a_dim = self.ac_space.n
+        logits = tf.layers.dense(y, a_dim)
+        a=tf.argmax(logits,1)
 
         return a
 
     def act(self, ob, random_stream=None):
-        p =  self._act(ob)[0]
-        choices = self.ac_space.shape[0]
-        a = np.random.choice(choices, p=p)
-        return a
+        return self._act(ob)
 
     @property
     def needs_ob_stat(self):

@@ -1,26 +1,28 @@
 {
   "config": {
     "global_seed": 123,
-    "n_gens": 100,
-    "n_nodes": 1,
-    "n_noise": 250000000,
-    "init_tstep_limit":1000,
-    "min_gen_time":0.2,
-    "calc_obstat_prob": 0.01,
-    "episodes_per_batch": 5000,
-    "eval_prob": 0.003,
-    "l2coeff": 0.005,
     "noise_stdev": 0.005,
-    "snapshot_freq": 20,
+    "n_noise": 250000000,
+    "n_tsteps":500000,
+    "episodes_per_batch": 10,
     "timesteps_per_batch": 100000,
+    "init_tstep_limit":5000,
+    "min_gen_time":0.2,
+    "n_parents": 10,
+    "n_elite_evals": 2,
+
+    "n_gens": 10,
+    "n_nodes": 1,
     "return_proc_mode": "centered_rank",
     "episode_cutoff_mode": "env_default",
+    "calc_obstat_prob": 0.01,
+    "eval_prob": 0.003,
+    "l2coeff": 0.005,
+    "snapshot_freq": 20,
     "adaptive_tstep_lim": false,
     "tstep_maxing_thresh": 0.5,
-    "tstep_lim_incr_ratio": 1.1,
-    "n_parents": 0.002
+    "tstep_lim_incr_ratio": 1.1
   },
-  "env_id": "Breakout-v0",
   "exp_prefix": "humanoid",
   "optimizer": {
     "args": {

@@ -1,26 +1,28 @@
 {
   "config": {
-    "noise_stdev": 0.005,
+    "global_seed": 123,
+    "noise_stdev": 0.02,
     "n_noise": 250000000,
     "n_tsteps":1000000000,
-    "episodes_per_batch": 5000,
+    "episodes_per_batch": 10000,
     "timesteps_per_batch": 100000,
-    "init_tstep_limit":5000,
+    "init_tstep_limit":20000,
     "min_gen_time":0.2,
     "n_parents": 10,
-    "eval_prob": 0.01,
 
     "n_gens": 10,
     "n_nodes": 1,
     "return_proc_mode": "centered_rank",
     "episode_cutoff_mode": "env_default",
     "calc_obstat_prob": 0.01,
+    "eval_prob": 0.003,
     "l2coeff": 0.005,
     "snapshot_freq": 20,
     "adaptive_tstep_lim": false,
     "tstep_maxing_thresh": 0.5,
     "tstep_lim_incr_ratio": 1.1
   },
+  "env_id": "Humanoid-v1",
   "exp_prefix": "humanoid",
   "optimizer": {
     "args": {
@@ -30,26 +32,15 @@
   },
   "policy": {
     "args": {
-      "kernel_sizes": [
-        8,
-        4,
-        3
+      "ac_bins": "continuous:",
+      "ac_noise_std": 0.01,
+      "connection_type": "ff",
+      "hidden_dims": [
+        256,
+        256
       ],
-      "n_channels":[
-        32,
-        64,
-        64
-      ],
-      "strides":[
-        4,
-        2,
-        1
-      ],
-      "hidden_dims":[
-        512
-      ],
-      "nonlin_type": "relu"
+      "nonlin_type": "tanh"
     },
-    "type": "AtariPolicy"
+    "type": "MujocoPolicy"
   }
 }
