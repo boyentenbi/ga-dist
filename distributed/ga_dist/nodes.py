@@ -158,19 +158,20 @@ class Node:
 
                     new_idx = self.noise.sample_index(rs, policy.num_params)
                     noise_list = [new_idx]
+                    is_eval = False
                     # Use the first index to initialize using glorot
                     v = policy.init_from_noise_idxs(
                         self.noise.get(noise_list[0], policy.num_params), glorot_std=1.)
                     parent_idx = None
 
                 else:
-                    parent_idx = rs.choice(len(gen_data.noise_lists))
-                    parent_noise_list = gen_data.noise_lists[parent_idx]
 
-                    if rs.random.random() < self.config.eval_prob:
-                        noise_list = parent_noise_list
+                    if rs.rand() < self.config.eval_prob:
+                        noise_list = gen_data.noise_lists[-1] # the elite
                         is_eval = True
                     else:
+                        parent_idx = rs.choice(len(gen_data.noise_lists))
+                        parent_noise_list = gen_data.noise_lists[parent_idx]
                         new_idx = self.noise.sample_index(rs, policy.num_params)
                         noise_list = parent_noise_list + [new_idx]
                         is_eval = False
@@ -183,16 +184,16 @@ class Node:
 
 
                 policy.set_trainable_flat(v)
-                rewards, len = policy.rollout(env, timestep_limit=self.config.init_tstep_limit)
+                rewards, length = policy.rollout(env, timestep_limit=self.config.init_tstep_limit)
 
                 # policy.set_trainable_flat(task_data.params - v)
                 # rews_neg, len_neg = rollout_and_update_ob_stat(
                 #     policy, env, task_data.timestep_limit, rs, task_ob_stat, config.calc_obstat_prob)
-                ret = np.sum(rewards)
-                duration = time.time() - cycle_tstart
+                ret = float(np.sum(rewards))
+                duration = float(time.time() - cycle_tstart)
                 logger.info('Eval result: gen_id={} return={:.3f} length={}'.format(
-                    gen_id, ret, len))
-                wc.push_result(gen_id, Result(worker_id, noise_list, ret, len, duration, is_eval))
+                    gen_id, ret, length))
+                wc.push_result(gen_id, Result(worker_id, noise_list, ret, length, duration, is_eval))
                 cycle_eps_done += 1
 
             eps_done += cycle_eps_done
@@ -208,13 +209,15 @@ class MasterNode(Node):
         logger.info("Node {} contains the master client.".format(self.node_id))
         self.master_client = MasterClient(self.master_redis_cfg)
         self.log_quantities = [
-            'EvalRetMax', 'EvalRetUQ', 'EvalRetMed', 'EvalRetLQ', 'EvalRetMin',
-            'EvalLenMax', 'EvalLenUQ', 'EvalLenMed', 'EvalLenLQ', 'EvalLenMin',
-            'EpRetMax', 'EpRetParentMin', 'EpRetUQ', 'EpRetMed', 'EpRetLQ', 'EpRetMin',
-            'EpLenMax', 'EpLenUQ', 'EpLenMed', 'EpLenLQ', 'EpLenMin',
-            "EpisodesSoFar", "TimestepsThisIter", "TimestepsSoFar",
-            "UniqueWorkers", "UniqueWorkersFrac", "WorkerEpsMax", "WorkerEpsUQ", "WorkerEpsMed",
-            "WorkerEpsLQ", "WorkerEpsMin",
+            'EvalRetMax', 'EvalRetMed', 'EvalRetMin',
+            'EvalLenMax', 'EvalLenMed', 'EvalLenMin',
+            'EvalEps', 'EvalSteps',
+
+            'EpRetMax', 'EpRetParentMin', 'EpRetMed', 'EpRetMin',
+            'EpLenMax', 'EpLenMed', 'EpLenMin',
+            "TimestepsThisIter", "TimestepsSoFar", 'ExpMutEps',
+            "UniqueWorkers", "UniqueWorkersFrac",
+            "WorkerEpsMax", "WorkerEpsMed", "WorkerEpsMin",
             "ResultsSkippedFrac",
             "TimeElapsedThisIter", "TimeElapsed",
             "TopGenome"]
@@ -235,7 +238,8 @@ class MasterNode(Node):
         with open(csv_log_path, 'w') as f:
             writer = csv.DictWriter(f, fieldnames=self.log_quantities)
             writer.writeheader()
-
+        with open(json_log_path, 'w') as f:
+            json.dump([], f)
         # Prepare for experiment
         exp_tstart = time.time()
         self.master_client.declare_experiment(self.exp)
@@ -262,13 +266,15 @@ class MasterNode(Node):
             # We shouldn't get more than this number of bad episodes
             gen_tstart = time.time()
 
-            # Collect the generation (a lot of work/waiting)
+            # Collect the generation (a lot of work)
             n_gen_eps, n_gen_steps, \
             n_eval_eps, n_eval_steps, \
             n_bad_eps, n_bad_steps, bad_time, \
             worker_eps, \
             mut_rets, mut_lens, mut_times, mut_noise_lists, \
             eval_rets, eval_lens, eval_times, eval_noise_lists = self.collect_gen(gen_id, gen_start_queue_size)
+            for enl in eval_noise_lists:
+                assert enl == elite_noise_lists[-1]
 
             # All other nodes are now wasting compute for master from here!
             n_exp_eps += n_gen_eps
@@ -424,6 +430,7 @@ class MasterNode(Node):
             if r.is_eval:
 
                 if worker_gen_id == gen_id:
+                    worker_id = r.worker_id
                     if worker_id in worker_eps:
                         worker_eps[worker_id] += 1
                     else:
@@ -433,10 +440,10 @@ class MasterNode(Node):
                     eval_rets.append(r.ret)
                     eval_lens.append(r.len)
                     eval_noise_lists.append(r.noise_list)
-                    eval_times.append(r.time())
+                    eval_times.append(r.time)
                 else:
                     n_bad_eps += 1
-                    n_bad_steps += r.eval_len
+                    n_bad_steps += r.len
                     bad_time += r.time
                     assert n_bad_eps < gen_start_queue_size + 10000
 
@@ -452,7 +459,7 @@ class MasterNode(Node):
                     mut_rets.append(r.ret)
                     mut_lens.append(r.len)
                     mut_noise_lists.append(r.noise_list)
-                    mut_times.append(r.time())
+                    mut_times.append(r.time)
 
                 else:
                     n_bad_eps += 1
@@ -483,9 +490,9 @@ class MasterNode(Node):
     def json_log_append(self, log_dict, json_log_path):
         with open(json_log_path, 'r') as f:
             results = json.load(f)
-        results.append(log_dict)
         with open(json_log_path,'w') as f:
-            json.dump(results, f)
+            results.append(log_dict)
+            json.dump(results, f, indent=2)
 
     def get_log_dict(self, eval_rets, eval_lens, n_eval_eps, n_eval_steps,
                 mut_rets, mut_lens, parent_rets, n_exp_eps, n_gen_steps, n_exp_steps,
@@ -495,15 +502,15 @@ class MasterNode(Node):
         weps = np.asarray([x for x in worker_eps.values()])
         return \
         {'EvalRetMax': np.nan if not eval_rets else np.max(eval_rets),
-         'EvalRetUQ': np.nan if not eval_rets else np.percentile(eval_rets, 75),
-         'EvalRetMed': np.nan if not eval_rets else np.median(eval_rets, 50),
-         'EvalRetLQ': np.nan if not eval_rets else np.percentile(eval_rets, 25),
+         # 'EvalRetUQ': np.nan if not eval_rets else np.percentile(eval_rets, 75),
+         'EvalRetMed': np.nan if not eval_rets else np.median(eval_rets),
+         # 'EvalRetLQ': np.nan if not eval_rets else np.percentile(eval_rets, 25),
          'EvalRetMin': np.nan if not eval_rets else np.min(eval_rets),
 
          'EvalLenMax': np.nan if not eval_lens else np.max(eval_lens),
-         'EvalLenUQ': np.nan if not eval_lens else np.percentile(eval_lens, 75),
-         'EvalLenMed': np.nan if not eval_lens else np.median(eval_lens, 50),
-         'EvalLenLQ': np.nan if not eval_lens else np.percentile(eval_lens, 25),
+         # 'EvalLenUQ': np.nan if not eval_lens else np.percentile(eval_lens, 75),
+         'EvalLenMed': np.nan if not eval_lens else np.median(eval_lens),
+         # 'EvalLenLQ': np.nan if not eval_lens else np.percentile(eval_lens, 25),
          'EvalLenMin': np.nan if not eval_lens else np.min(eval_lens),
 
          'EvalEps': n_eval_eps,
@@ -511,15 +518,15 @@ class MasterNode(Node):
 
          "EpRetMax": np.nan if not mut_rets else np.max(mut_rets),
          "EpRetParentMin": np.nan if not mut_rets else parent_rets[0],
-         "EpRetUQ": np.nan if not mut_rets else np.percentile(mut_rets, 75),
+         # "EpRetUQ": np.nan if not mut_rets else np.percentile(mut_rets, 75),
          "EpRetMed": np.nan if not mut_rets else np.median(mut_rets),
-         "EpRetLQ": np.nan if not mut_rets else np.percentile(mut_rets, 25),
+         # "EpRetLQ": np.nan if not mut_rets else np.percentile(mut_rets, 25),
          "EpRetMin": np.nan if not mut_rets else np.min(mut_rets),
 
          "EpLenMax": np.nan if not mut_lens else np.max(mut_lens),
-         "EpLenUQ": np.nan if not mut_lens else np.percentile(mut_lens, 75),
+         # "EpLenUQ": np.nan if not mut_lens else np.percentile(mut_lens, 75),
          "EpLenMed": np.nan if not mut_lens else np.median(mut_lens),
-         "EpLenLQ": np.nan if not mut_lens else np.percentile(mut_lens, 25),
+         # "EpLenLQ": np.nan if not mut_lens else np.percentile(mut_lens, 25),
          "EpLenMin": np.nan if not mut_lens else np.min(mut_lens),
 
          "ExpMutEps": n_exp_eps,
@@ -529,9 +536,9 @@ class MasterNode(Node):
          "UniqueWorkers": num_unique_workers,
          "UniqueWorkersFrac": num_unique_workers / np.sum(weps),
          "WorkerEpsMax": np.max(weps),
-         "WorkerEpsUQ": np.percentile(weps, 75),
+         # "WorkerEpsUQ": np.percentile(weps, 75),
          "WorkerEpsMed": np.median(weps),
-         "WorkerEpsLQ": np.percentile(weps, 25),
+         # "WorkerEpsLQ": np.percentile(weps, 25),
          "WorkerEpsMin": np.min(weps),
 
          "ResultsSkippedFrac": skip_frac,

@@ -70,7 +70,7 @@ if __name__ == "__main__":
         # This node contains the master
         master_node = MasterNode(
             node_id,
-            16 if args.super_exp_id=="login_node_test" else 31,
+            8 if args.super_exp_id=="login_node_test" else 31,
             exp,
             master_host=node_name,
             master_port=6379,
