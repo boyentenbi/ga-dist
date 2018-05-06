@@ -1,8 +1,8 @@
 {
   "config": {
     "noise_stdev": 0.005,
-    "n_noise": 250000000,
-    "n_tsteps":500000,
+    "n_noise": 25000000,
+    "n_tsteps":100000,
     "episodes_per_batch": 10,
     "timesteps_per_batch": 10000,
     "init_tstep_limit":5000,

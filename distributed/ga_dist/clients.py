@@ -104,7 +104,7 @@ class MasterClient:
         p.publish(TASK_CHANNEL, to_publish) # TODO serialized serialized?
         p.execute()
         logger.debug('[master] declared generation {} with id {}'.format(gen_num, gen_id))
-        return gen_id
+        return gen_id, gen_num
 
     # Get a result from the relay redis
     def pop_result(self):

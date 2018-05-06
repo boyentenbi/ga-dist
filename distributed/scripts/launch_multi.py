@@ -63,13 +63,13 @@ ATARI_ENV_IDS = [
     "ZaxxonNoFrameskip-v4",]
 
 super_exp_id = time.strftime("%Y:%m:%d-%H:%M:%S")
-games = ["FrostbiteNoFrameskip-v4"]
+games = ["SkiingNoFrameskip-v4"]
 n_games = len(games)
 n_seeds = 5
 rnd = np.random.randint(2**31)
 
-print("This will launch {} jobs for 10 hours on 8 nodes each.".format(n_games * n_seeds))
-print("This will cost you a maximum of {} core-hours".format(80*32*n_games*n_seeds))
+print("This will launch {} jobs for 12 hours on 8 nodes each.".format(n_games * n_seeds))
+print("This will cost you a maximum of {} core-hours".format(12*8*32*n_games*n_seeds))
 if not input("Is your config file correct? y/n:")=="y":
     exit()
 if not input("Is the number of hours and nodes and tasks set correctly in your slurm script? y/n:")=="y":

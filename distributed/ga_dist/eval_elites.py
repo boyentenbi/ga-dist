@@ -20,7 +20,7 @@ n_gifs = 5
 
 def eval_elite(super_exp_id, env_id, global_seed, n_runs, n_gifs):
     # Load the experiment from file
-    with open("configurations/atari123.json", 'r') as f:
+    with open("configurations/atari.json", 'r') as f:
         exp = json.loads(f.read())
     exp_config = exp["config"]
     exp_config["env_id"] = env_id

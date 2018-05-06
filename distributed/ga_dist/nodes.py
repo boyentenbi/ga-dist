@@ -36,8 +36,9 @@ Result = namedtuple('Result', [
     'worker_id',
     'noise_list',
     'ret',
-    'len',
-    'time',
+    'n_steps',
+    'n_seconds',
+    'finish_time',
     'is_eval',
 ])
 
@@ -184,16 +185,24 @@ class Node:
 
 
                 policy.set_trainable_flat(v)
-                rewards, length = policy.rollout(env, timestep_limit=self.config.init_tstep_limit)
+                rewards, n_steps = policy.rollout(env, timestep_limit=self.config.init_tstep_limit)
 
                 # policy.set_trainable_flat(task_data.params - v)
                 # rews_neg, len_neg = rollout_and_update_ob_stat(
                 #     policy, env, task_data.timestep_limit, rs, task_ob_stat, config.calc_obstat_prob)
                 ret = float(np.sum(rewards))
-                duration = float(time.time() - cycle_tstart)
+                finish_time = time.time()
+                n_seconds = float(finish_time - cycle_tstart)
                 logger.info('Eval result: gen_id={} return={:.3f} length={}'.format(
-                    gen_id, ret, length))
-                wc.push_result(gen_id, Result(worker_id, noise_list, ret, length, duration, is_eval))
+                    gen_id, ret, n_steps))
+                wc.push_result(gen_id,
+                               Result(worker_id=worker_id,
+                                      noise_list=noise_list,
+                                      ret=ret,
+                                      n_steps=n_steps,
+                                      n_seconds=n_seconds,
+                                      finish_time=finish_time,
+                                      is_eval=is_eval))
                 cycle_eps_done += 1
 
             eps_done += cycle_eps_done
@@ -209,18 +218,15 @@ class MasterNode(Node):
         logger.info("Node {} contains the master client.".format(self.node_id))
         self.master_client = MasterClient(self.master_redis_cfg)
         self.log_quantities = [
-            'EvalRetMax', 'EvalRetMed', 'EvalRetMin',
-            'EvalLenMax', 'EvalLenMed', 'EvalLenMin',
-            'EvalEps', 'EvalSteps',
-
-            'EpRetMax', 'EpRetParentMin', 'EpRetMed', 'EpRetMin',
-            'EpLenMax', 'EpLenMed', 'EpLenMin',
-            "TimestepsThisIter", "TimestepsSoFar", 'ExpMutEps',
-            "UniqueWorkers", "UniqueWorkersFrac",
-            "WorkerEpsMax", "WorkerEpsMed", "WorkerEpsMin",
-            "ResultsSkippedFrac",
-            "TimeElapsedThisIter", "TimeElapsed",
-            "TopGenome"]
+            'worker_id',
+            'noise_list',
+            'ret',
+            'n_steps',
+            'n_seconds',
+            'finish_time',
+            'is_eval',
+            'worker_gen',
+            'master_gen']
 
     def begin_exp(self):
 
@@ -229,9 +235,9 @@ class MasterNode(Node):
         # Logging files! Very important!
         #year, month, day, hour, min, sec = time.localtime()[:6]
         #log_folder = "deepmind-{}.{}.{}:{}:{}.{}-{}-{}".format(self.exp['env_id'], self.n_workers, hour, min, sec, day, month, year)
-        csv_log_path = os.path.join(self.log_dir, "log.csv")
+        csv_log_path = os.path.join(self.log_dir, "results.csv")
         tab_log_path = os.path.join(self.log_dir)
-        json_log_path = os.path.join(self.log_dir, "results.json")
+        json_log_path = os.path.join(self.log_dir, "short_log.json")
         logger.info('Tabular logging to {}/log.txt'.format(tab_log_path))
         logger.info('csv logging to {}'.format(csv_log_path))
         tlogger.start(tab_log_path)
@@ -241,12 +247,13 @@ class MasterNode(Node):
         with open(json_log_path, 'w') as f:
             json.dump([], f)
         # Prepare for experiment
-        exp_tstart = time.time()
         self.master_client.declare_experiment(self.exp)
         parent_noise_lists, parent_rets = [], []
         tstep_lim = self.config.init_tstep_limit
         n_exp_gens, n_exp_eps, n_exp_steps = 0, 0, 0
-        elite_noise_lists = []
+        elite_results = []
+        gen_nums = {}
+
         sess = make_session(single_threaded=True) # don't comment me out!
 
         #env = wrap_deepmind(make_atari(self.exp['env_id']), frame_stack=True, scale=True, episode_life=False, clip_rewards=False)
@@ -254,31 +261,33 @@ class MasterNode(Node):
         #policy = policy_class(env.observation_space, env.action_space, **self.exp['policy']['args'])
         tf_util.initialize()
 
+        exp_tstart = time.time()
         # Iterate over generations
         while n_exp_steps < self.config.n_tsteps:
 
-            gen_id = self.master_client.declare_gen(
+            gen_id, gen_num = self.master_client.declare_gen(
                 Gen(noise_lists=parent_noise_lists,
                     timestep_limit=self.config.init_tstep_limit))
-
+            assert gen_id not in gen_nums
+            gen_nums[gen_id] = len(gen_nums)
             # Count the number on the queue immediately after declaring the generation
             gen_start_queue_size = self.master_client.master_redis.llen(RESULTS_KEY)
             # We shouldn't get more than this number of bad episodes
             gen_tstart = time.time()
 
             # Collect the generation (a lot of work)
-            n_gen_eps, n_gen_steps, \
-            n_eval_eps, n_eval_steps, \
-            n_bad_eps, n_bad_steps, bad_time, \
-            worker_eps, \
-            mut_rets, mut_lens, mut_times, mut_noise_lists, \
-            eval_rets, eval_lens, eval_times, eval_noise_lists = self.collect_gen(gen_id, gen_start_queue_size)
-            for enl in eval_noise_lists:
-                assert enl == elite_noise_lists[-1]
+            results = self.collect_gen(gen_id, gen_start_queue_size)
 
+            gen_ids_set = set(gen_nums.keys())
+            results = [r for r in results if r['worker_gen_id'] in gen_ids_set]
             # All other nodes are now wasting compute for master from here!
-            n_exp_eps += n_gen_eps
-            n_exp_steps += n_gen_steps
+            mut_results =  [r for r in results if r['worker_gen_id']==gen_id and not r['is_eval']]
+            eval_results = [r for r in results if r['worker_gen_id']==gen_id and r['is_eval']]
+            for er in eval_results:
+                assert er['noise_list'] == elite_results[-1]['noise_list']
+
+            n_exp_eps += len(mut_results)
+            n_exp_steps += sum([r['n_steps'] for r in mut_results])
             n_exp_gens += 1
 
             # # Determine if the timestep limit needs to be increased
@@ -290,55 +299,38 @@ class MasterNode(Node):
 
             # append previous best to new list: 'elitism'
 
+
+            mut_results.sort(key=lambda r: r['ret'])
             if n_exp_gens >= 2:
                 # append the previous elite
-                # which doesn't exist if we've only done 1 gen
-                mut_noise_lists.append(parent_noise_lists[-1])
-                mut_rets.append(parent_rets[-1])
+                sorted_w_elite = sorted(mut_results[-self.config.n_parents:]+[elite_results[-1]],
+                                        key = lambda x: x['ret'])
+                top_results = sorted_w_elite[-self.config.n_parents:]
+            else:
+                top_results = mut_results[-self.config.n_parents:]
 
-            # Order the mutated noise lists and returns
-            # set the noise list ready for next iter
-            order = sorted(range(len(mut_noise_lists)), key = lambda i: mut_rets[i])
-            ordered_lists = [mut_noise_lists[j] for j in order]
-            ordered_rets = [mut_rets[j] for j in order]
-            parent_noise_lists = ordered_lists[-self.config.n_parents+1:]
-            parent_rets = ordered_rets[-self.config.n_parents+1:]
-            # append the new elite to the list
-            # which exists after the first gen
-            elite_noise_lists.append(parent_noise_lists[-1])
+            elite_results.append(top_results[-1])
+
+            parent_noise_lists = [r['noise_list'] for r in top_results]
 
             # Compute the skip fraction
-            skip_frac = n_bad_eps / n_gen_eps
+            n_bad_eps = len(results)-len(mut_results)-len(eval_results)
+            skip_frac = n_bad_eps/ len(results)
             if skip_frac > 0:
                 logger.warning('Skipped {} out of date results ({:.2f}%)'.format(
                     n_bad_eps, 100. * skip_frac))
 
-            # stop the clock
-            # We've now recorded the time to pull and process an entire gen
-            # can ignore logging time (negligible and not part of experiment)
             gen_tend = time.time()
 
-            # Write the logs
-            csv_log_dict = self.get_log_dict(
-                eval_rets, eval_lens, n_eval_eps, n_eval_steps,
-                mut_rets, mut_lens, parent_rets, n_exp_eps, n_gen_steps, n_exp_steps,
-                worker_eps, gen_tend, exp_tstart, gen_tstart, parent_noise_lists, skip_frac)
-
-            self.csv_log_append(csv_log_dict, csv_log_path, self.log_quantities)
+            # Write the short logs
+            self.log_json(mut_results, eval_results, elite_results[-1], gen_tend,
+                          exp_tstart, gen_tstart,  skip_frac, n_exp_steps, n_exp_eps,
+                          json_log_path)
 
             # Record literally everything
             # This should only be ~ 5MB for an entire experiment
-            json_log_dict = {
-                'mut_lens': mut_lens,
-                'mut_rets': mut_rets,
-                'mut_times': mut_times,
-                'eval_lens': eval_lens,
-                'eval_rets': eval_rets,
-                'eval_times': eval_times,
-                'elite_genome':  "-".join(map(str, elite_noise_lists[-2])) if len(elite_noise_lists) >= 2 else "",
-                'top_genome':  "-".join(map(str, elite_noise_lists[-1]))}
+            self.log_csv(results, csv_log_path, gen_nums, exp_tstart)
 
-            self.json_log_append(json_log_dict, json_log_path)
 
         logger.info("Finished {} generations in {} timesteps.".format(n_exp_gens, n_exp_steps))
 
@@ -414,66 +406,83 @@ class MasterNode(Node):
 
     def collect_gen(self, gen_id, gen_start_queue_size):
         # Prep for new gen results
-        n_gen_eps, n_gen_steps, \
-        n_eval_eps, n_eval_steps, \
-        n_bad_eps, n_bad_steps, bad_time = 0, 0, 0, 0, 0, 0, 0
-        mut_rets, mut_lens, mut_times, mut_noise_lists = [], [], [], []
-        eval_rets, eval_lens, eval_times, eval_noise_lists = [], [], [], []
-        worker_eps = {}
+        n_mut_eps, n_mut_steps = 0, 0
+        # n_eval_eps, n_eval_steps = 0, 0
+        # n_bad_eps, n_bad_steps, bad_time = 0, 0, 0, 0, 0, 0, 0
+        # mut_rets, mut_lens, mut_times, mut_noise_lists = [], [], [], []
+        # eval_rets, eval_lens, eval_times, eval_noise_lists = [], [], [], []
+        # worker_eps = {}
+
+        results = []
 
         # Keep collecting results until we reach BOTH thresholds
-        while n_gen_eps < self.config.episodes_per_batch or \
-                n_gen_steps < self.config.timesteps_per_batch:
-            # Pop a result, accumulate if current gen, throw if past gen
+        while n_mut_eps < self.config.episodes_per_batch or \
+                n_mut_steps < self.config.timesteps_per_batch:
+
             worker_gen_id, r = self.master_client.pop_result()
 
-            if r.is_eval:
+            result_dict = {'worker_id': r.worker_id,
+                            'noise_list': r.noise_list,
+                            'ret': r.ret,
+                            'n_steps': r.n_steps,
+                            'n_seconds': r.n_seconds,
+                            'finish_time': r.finish_time,
+                            'is_eval': r.is_eval,
+                            'worker_gen_id': worker_gen_id,
+                            'master_gen_id': gen_id,}
+            results.append(result_dict)
 
-                if worker_gen_id == gen_id:
-                    worker_id = r.worker_id
-                    if worker_id in worker_eps:
-                        worker_eps[worker_id] += 1
-                    else:
-                        worker_eps[worker_id] = 1
-                    n_eval_eps += 1
-                    n_eval_steps += r.len
-                    eval_rets.append(r.ret)
-                    eval_lens.append(r.len)
-                    eval_noise_lists.append(r.noise_list)
-                    eval_times.append(r.time)
-                else:
-                    n_bad_eps += 1
-                    n_bad_steps += r.len
-                    bad_time += r.time
-                    assert n_bad_eps < gen_start_queue_size + 10000
+            if worker_gen_id == gen_id and not r.is_eval:
+                n_mut_eps += 1
+                n_mut_steps += r.n_steps
 
-            else:
-                if worker_gen_id == gen_id:
-                    worker_id = r.worker_id
-                    if worker_id in worker_eps:
-                        worker_eps[worker_id] += 1
-                    else:
-                        worker_eps[worker_id] = 1
-                    n_gen_eps += 1
-                    n_gen_steps += r.len
-                    mut_rets.append(r.ret)
-                    mut_lens.append(r.len)
-                    mut_noise_lists.append(r.noise_list)
-                    mut_times.append(r.time)
+        return results
 
-                else:
-                    n_bad_eps += 1
-                    n_bad_steps += r.len
-                    bad_time += r.time
-                    assert n_bad_eps < gen_start_queue_size + 10000
-            logger.debug("n_gen_eps = {}, n_bad_eps = {}".format(n_gen_eps, n_bad_eps))
+            # if r.is_eval:
+            #
+            #     if worker_gen_id == gen_id:
+            #         worker_id = r.worker_id
+            #         if worker_id in worker_eps:
+            #             worker_eps[worker_id] += 1
+            #         else:
+            #             worker_eps[worker_id] = 1
+            #         n_eval_eps += 1
+            #         n_eval_steps += r.n_steps
+            #         eval_rets.append(r.ret)
+            #         eval_lens.append(r.n_steps)
+            #         eval_noise_lists.append(r.noise_list)
+            #         eval_times.append(r.n_millis)
+            #     else:
+            #         n_bad_eps += 1
+            #         n_bad_steps += r.n_steps
+            #         bad_time += r.n_millis
+            #
+            # else:
+            #     if worker_gen_id == gen_id:
+            #         worker_id = r.worker_id
+            #         if worker_id in worker_eps:
+            #             worker_eps[worker_id] += 1
+            #         else:
+            #             worker_eps[worker_id] = 1
+            #         n_gen_eps += 1
+            #         n_gen_steps += r.n_steps
+            #         mut_rets.append(r.ret)
+            #         mut_lens.append(r.n_steps)
+            #         mut_noise_lists.append(r.noise_list)
+            #         mut_times.append(r.n_millis)
+            #
+            #     else:
+            #         n_bad_eps += 1
+            #         n_bad_steps += r.n_steps
+            #         bad_time += r.n_millis
+            # logger.debug("n_gen_eps = {}, n_bad_eps = {}".format(n_gen_eps, n_bad_eps))
 
-        return n_gen_eps, n_gen_steps, \
-               n_eval_eps, n_eval_steps, \
-               n_bad_eps, n_bad_steps, bad_time, \
-               worker_eps, \
-               mut_rets, mut_lens, mut_times, mut_noise_lists,\
-               eval_rets, eval_lens, eval_times, eval_noise_lists
+        # return n_mut_eps, n_mut_steps, \
+        #        n_eval_eps, n_eval_steps, \
+        #        n_bad_eps, n_bad_steps, bad_time, \
+        #        worker_eps, \
+        #        mut_rets, mut_lens, mut_times, mut_noise_lists,\
+        #        eval_rets, eval_lens, eval_times, eval_noise_lists
 
     def tabular_log_append(self, log_dict, tlogger):
 
@@ -482,70 +491,95 @@ class MasterNode(Node):
                 tlogger.record_tabular(quantity, value)
         tlogger.dump_tabular()
 
-    def csv_log_append(self, log_dict, csv_log_path, fieldnames):
+    def log_csv(self, results, csv_log_path, gen_nums, exp_tstart):
+
+        saveable_results = []
+        for r in results:
+            row_dict = {'worker_id'  : r['worker_id'],
+                        'noise_list' : "-".join([str(idx) for idx in r['noise_list']]),
+                        'ret'        : r['ret'],
+                        'n_steps'    : r['n_steps'],
+                        'n_seconds'   : r['n_seconds'],
+                        'finish_time': r['finish_time']-exp_tstart,
+                        'is_eval'    : r['is_eval'],
+                        'worker_gen' : gen_nums[r['worker_gen_id']],
+                        'master_gen' : gen_nums[r['master_gen_id']], }
+            saveable_results.append(row_dict)
+
         with open(csv_log_path, 'a') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writerow(log_dict)
+            writer = csv.DictWriter(f,
+                                    fieldnames=[
+                                        'worker_id',
+                                        'noise_list',
+                                        'ret',
+                                        'n_steps',
+                                        'n_seconds',
+                                        'finish_time',
+                                        'is_eval',
+                                        'worker_gen',
+                                        'master_gen'
+                                    ])
+            writer.writerows(saveable_results)
 
-    def json_log_append(self, log_dict, json_log_path):
-        with open(json_log_path, 'r') as f:
-            results = json.load(f)
-        with open(json_log_path,'w') as f:
-            results.append(log_dict)
-            json.dump(results, f, indent=2)
 
-    def get_log_dict(self, eval_rets, eval_lens, n_eval_eps, n_eval_steps,
-                mut_rets, mut_lens, parent_rets, n_exp_eps, n_gen_steps, n_exp_steps,
-                worker_eps, gen_tend, exp_tstart, gen_tstart, parent_noise_lists, skip_frac):
+    def log_json(self, mut_results, eval_results, elite_result, gen_tend,
+                 exp_tstart, gen_tstart, skip_frac, n_exp_steps, n_exp_eps,
+                 json_log_path):
 
-        num_unique_workers = len(worker_eps.keys())
+        eval_rets = [r['ret'] for r in eval_results]
+        eval_lens = [r['n_steps'] for r in eval_results]
+        mut_rets = [r['ret'] for r in mut_results]
+        mut_lens = [r['n_steps'] for r in mut_results]
+
+        unique_workers = set([r['worker_id'] for r in mut_results + eval_results])
+        worker_eps = {}
+        for w in unique_workers:
+            worker_eps[w] = len([r for r in mut_results + eval_results if r['worker_id'] == w])
         weps = np.asarray([x for x in worker_eps.values()])
-        return \
-        {'EvalRetMax': np.nan if not eval_rets else np.max(eval_rets),
-         # 'EvalRetUQ': np.nan if not eval_rets else np.percentile(eval_rets, 75),
-         'EvalRetMed': np.nan if not eval_rets else np.median(eval_rets),
-         # 'EvalRetLQ': np.nan if not eval_rets else np.percentile(eval_rets, 25),
-         'EvalRetMin': np.nan if not eval_rets else np.min(eval_rets),
+        d=\
+        {'EvalRetMax': None if not eval_rets else float(np.max(eval_rets)),
+         'EvalRetMed': None if not eval_rets else float(np.median(eval_rets)),
+         'EvalRetMin': None if not eval_rets else float(np.min(eval_rets)),
 
-         'EvalLenMax': np.nan if not eval_lens else np.max(eval_lens),
-         # 'EvalLenUQ': np.nan if not eval_lens else np.percentile(eval_lens, 75),
-         'EvalLenMed': np.nan if not eval_lens else np.median(eval_lens),
-         # 'EvalLenLQ': np.nan if not eval_lens else np.percentile(eval_lens, 25),
-         'EvalLenMin': np.nan if not eval_lens else np.min(eval_lens),
+         'EvalLenMax': None if not eval_lens else int(np.max(eval_lens)),
+         'EvalLenMed': None if not eval_lens else int(np.median(eval_lens)),
+         'EvalLenMin': None if not eval_lens else int(np.min(eval_lens)),
 
-         'EvalEps': n_eval_eps,
-         'EvalSteps': n_eval_steps,
+         'EvalEps': len(eval_results),
+         'EvalSteps': sum(eval_lens),
 
-         "EpRetMax": np.nan if not mut_rets else np.max(mut_rets),
-         "EpRetParentMin": np.nan if not mut_rets else parent_rets[0],
-         # "EpRetUQ": np.nan if not mut_rets else np.percentile(mut_rets, 75),
-         "EpRetMed": np.nan if not mut_rets else np.median(mut_rets),
-         # "EpRetLQ": np.nan if not mut_rets else np.percentile(mut_rets, 25),
-         "EpRetMin": np.nan if not mut_rets else np.min(mut_rets),
+         "MutRetMax": None if not mut_rets else float(np.max(mut_rets)),
+         "MutRetParentMin": None if not mut_rets else float(mut_rets[-self.config.n_parents]),
+         "MutRetMed": None if not mut_rets else float(np.median(mut_rets)),
+         "MutRetMin": None if not mut_rets else float(np.min(mut_rets)),
 
-         "EpLenMax": np.nan if not mut_lens else np.max(mut_lens),
-         # "EpLenUQ": np.nan if not mut_lens else np.percentile(mut_lens, 75),
-         "EpLenMed": np.nan if not mut_lens else np.median(mut_lens),
-         # "EpLenLQ": np.nan if not mut_lens else np.percentile(mut_lens, 25),
-         "EpLenMin": np.nan if not mut_lens else np.min(mut_lens),
+         "MutLenMax": None if not mut_lens else int(np.max(mut_lens)),
+         "MutLenMed": None if not mut_lens else int(np.median(mut_lens)),
+         "MutLenMin": None if not mut_lens else int(np.min(mut_lens)),
 
+         "MutEps": len(mut_results),
+         "TimestepsThisIter": sum(mut_lens),
          "ExpMutEps": n_exp_eps,
-         "TimestepsThisIter": n_gen_steps,
          "TimestepsSoFar": n_exp_steps,
 
-         "UniqueWorkers": num_unique_workers,
-         "UniqueWorkersFrac": num_unique_workers / np.sum(weps),
-         "WorkerEpsMax": np.max(weps),
-         # "WorkerEpsUQ": np.percentile(weps, 75),
-         "WorkerEpsMed": np.median(weps),
-         # "WorkerEpsLQ": np.percentile(weps, 25),
-         "WorkerEpsMin": np.min(weps),
+         "UniqueWorkers": len(unique_workers),
+         "UniqueWorkersFrac": float(len(unique_workers)) / float(np.sum(weps)),
+         "WorkerEpsMax": int(np.max(weps)),
+         "WorkerEpsMed": int(np.median(weps)),
+         "WorkerEpsMin": int(np.min(weps)),
 
-         "ResultsSkippedFrac": skip_frac,
-         "TimeElapsedThisIter": gen_tend - gen_tstart,
-         "TimeElapsed": gen_tend - exp_tstart,
+         "ResultsSkippedFrac": float(skip_frac),
+         "TimeElapsedThisIter": float(gen_tend - gen_tstart),
+         "TimeElapsed": float(gen_tend - exp_tstart),
 
-         "TopGenome": "-".join(map(str, parent_noise_lists[-1]))}
+         "TopGenome": "-".join(map(str, elite_result['noise_list']))
+         }
+
+        with open(json_log_path, 'r') as f:
+            results = json.load(f)
+        with open(json_log_path, 'w') as f:
+            results.append(d)
+            json.dump(results, f, indent=2)
 
     def get_n_workers(self):
         if self.n_workers:

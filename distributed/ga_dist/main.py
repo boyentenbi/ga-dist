@@ -36,10 +36,10 @@ if __name__ == "__main__":
 
     # Load the experiment from file
     if os.environ["SLURMD_NODENAME"]=="login-e-13":
-        with open("configurations/atari123_login_node.json", 'r') as f:
+        with open("configurations/atari_login_node.json", 'r') as f:
             exp = json.loads(f.read())
     else:
-        with open("configurations/atari123.json", 'r') as f:
+        with open("configurations/atari.json", 'r') as f:
             exp = json.loads(f.read())
 
     exp["config"]["global_seed"] = int(args.global_seed)
@@ -48,8 +48,8 @@ if __name__ == "__main__":
 
     log_dir = os.path.join("logs", exp["super_exp_id"], exp["env_id"], str(exp["config"]["global_seed"]))
 
-    log_level = logging.DEBUG if os.environ["SLURMD_NODENAME"]=="login-e-13" else logging.info
-    logging.basicConfig(filename=os.path.join(log_dir, "node_{}.txt".format(node_id)), level=logging.DEBUG, filemode="w")
+    log_level = logging.DEBUG if os.environ["SLURMD_NODENAME"]=="login-e-13" else logging.INFO
+    logging.basicConfig(filename=os.path.join(log_dir, "node_{}.txt".format(node_id)), level=log_level, filemode="w")
     logger = logging.getLogger(__name__)
     logger.info("Starting GA. super_exp_id: {}, env_id: {}, global_seed:{}, node name: {}, assigned id: {}, node list: {}".format(
         exp["super_exp_id"], exp["env_id"], str(exp["config"]["global_seed"]), node_name, node_id, node_list
