@@ -10,8 +10,8 @@ import sys
 logger  = logging.getLogger(__name__) # TODO what is __name__ ?
 
 EXP_KEY = "ga:exp"
-GEN_ID_KEY = "ga:task_id"
-GEN_DATA_KEY = "ga:task_data"
+TASK_ID_KEY = "ga:task_id"
+TASK_DATA_KEY = "ga:task_data"
 TASK_CHANNEL = 'ga:task_channel'
 RESULTS_KEY = 'ga:results'
 #NOISES_KEY = 'ga:noises'
@@ -78,33 +78,33 @@ class MasterClient:
         assert self.master_redis.llen(RESULTS_KEY)==0
 
         logger.info('[master] connected to Redis: {}'.format(self.master_redis))
-        self.gen_counter = 0
+        #self.gen_counter = 0
 
     def declare_experiment(self, exp):
         self.master_redis.set(EXP_KEY, exp)
         logger.info('[master] Declared experiment {}'.format(pformat(exp)))
 
     # Declare a generation
-    def declare_gen(self, gen_data):
+    def declare_task(self, task_data, gen_num):
 
-        gen_num = self.gen_counter
-        self.gen_counter += 1
+        #gen_num = self.gen_counter
+        #self.gen_counter += 1
 
-        gen_id = np.random.randint(2**31)
+        task_id = np.random.randint(2**31)
 
         # Serialize the data, ready to send
-        gd = serialize(gen_data)
-        to_publish = serialize((gen_id, gd))
-        logger.info("Declaring generation {} with id {}. serialized has size {}".format(gen_num, gen_id, sys.getsizeof(to_publish)))
+        gd = serialize(task_data)
+        to_publish = serialize((task_id, gd))
+        logger.info("Declaring task {} for gen {}. serialized has size {}".format(task_id, gen_num, sys.getsizeof(to_publish)))
 
         # Create the pipe and send both items at once
         p = self.master_redis.pipeline()
-        p.mset({GEN_ID_KEY: gen_id,
-                GEN_DATA_KEY:gd})
+        p.mset({TASK_ID_KEY: task_id,
+                TASK_DATA_KEY:gd})
         p.publish(TASK_CHANNEL, to_publish) # TODO serialized serialized?
         p.execute()
-        logger.debug('[master] declared generation {} with id {}'.format(gen_num, gen_id))
-        return gen_id, gen_num
+        logger.debug('[master] declared task {} for gen {}'.format(task_id, gen_num))
+        return task_id
 
     # Get a result from the relay redis
     def pop_result(self):
@@ -112,9 +112,9 @@ class MasterClient:
         Pops a result from the results
         :return:
         """
-        gen_id, result = deserialize(self.master_redis.blpop(RESULTS_KEY)[1])
-        logger.debug('[master] Popped a result {} for generation with id {}'.format(result, gen_id))
-        return gen_id, result
+        task_id, result = deserialize(self.master_redis.blpop(RESULTS_KEY)[1])
+        logger.debug('[master] Popped a result {} for generation with id {}'.format(result, task_id))
+        return task_id, result
 
 class RelayClient:
     """
@@ -141,12 +141,12 @@ class RelayClient:
 
         # Initialization: read exp and latest gen from master
         self.local_redis.set(EXP_KEY, retry_get(self.master_redis, EXP_KEY))
-        gen_id, gen_data = retry_get(self.master_redis, (GEN_ID_KEY, GEN_DATA_KEY))
-        self._declare_gen_local(gen_id, gen_data)
+        task_id, task_data = retry_get(self.master_redis, (TASK_ID_KEY, TASK_DATA_KEY))
+        self._declare_task_local(task_id, task_data)
 
         # Start subscribing to tasks
         p = self.master_redis.pubsub(ignore_subscribe_messages=True)
-        p.subscribe(**{TASK_CHANNEL: lambda msg: self._declare_gen_local(*deserialize(msg['data']))})
+        p.subscribe(**{TASK_CHANNEL: lambda msg: self._declare_task_local(*deserialize(msg['data']))})
         subscription_thread = p.run_in_thread(sleep_time=0.001)
         batch_sizes = []
         last_print_time = time.time()
@@ -177,11 +177,11 @@ class RelayClient:
 
 
 
-    def _declare_gen_local(self, gen_id, gen_data):
-        logger.info('[relay] Received task {}'.format(gen_id))
-        self.local_redis.mset({GEN_ID_KEY: gen_id, GEN_DATA_KEY: gen_data})
+    def _declare_task_local(self, task_id, task_data):
+        logger.info('[relay] Received task {}'.format(task_id))
+        self.local_redis.mset({TASK_ID_KEY: task_id, TASK_DATA_KEY: task_data})
 
-        ##self.done = deserialize(gen_data).done
+        ##self.done = deserialize(task_data).done
 
     # def relay_noise_lists(self):
     #     self.master_redis.
@@ -196,46 +196,46 @@ class WorkerClient:
     def __init__(self, relay_redis_cfg):
         self.local_redis = retry_connect(relay_redis_cfg)
         logger.info('[worker] Connected to relay: {}'.format(self.local_redis))
-        self.cached_gen_id, self.cached_gen_data = None, None
+        self.cached_task_id, self.cached_task_data = None, None
 
     def get_experiment(self):
         exp = deserialize(retry_get(self.local_redis, EXP_KEY))
         logger.info('[worker] Experiment: {}'.format(exp))
         return exp
 
-    def get_current_gen(self):
+    def get_current_task(self):
 
         with self.local_redis.pipeline() as p:
             while True:
                 try:
                     # Look for a new gen
-                    p.watch(GEN_ID_KEY)
-                    gen_id = int(retry_get(p, GEN_ID_KEY))
-                    if gen_id == self.cached_gen_id:
-                        logger.debug('[worker] Returning cached gen_id {}'.format(gen_id))
+                    p.watch(TASK_ID_KEY)
+                    task_id = int(retry_get(p, TASK_ID_KEY))
+                    if task_id == self.cached_task_id:
+                        logger.debug('[worker] Returning cached task_id {}'.format(task_id))
                         break
                     else:
-                        # Got a gen num without an exception
+                        # Got a task id without an exception
                         # But its not the same as the cached one
                         p.multi()
-                        p.get(GEN_DATA_KEY)
+                        p.get(TASK_DATA_KEY)
                         logger.info(
-                            '[worker] Getting new gen with id {}. Cached gen was {}'.format(gen_id, self.cached_gen_id))
-                        gen_data = p.execute()[0]
-                        self.cached_gen_data = deserialize(gen_data)
-                        self.cached_gen_id =  gen_id
+                            '[worker] Getting new task with id {}. Cached task was {}'.format(task_id, self.cached_task_id))
+                        task_data = p.execute()[0]
+                        self.cached_task_data = deserialize(task_data)
+                        self.cached_task_id =  task_id
 
                         break
                 except redis.WatchError:
                     # Just try again
                     continue
 
-        return self.cached_gen_id, self.cached_gen_data
+        return self.cached_task_id, self.cached_task_data
 
-    def push_result(self, gen_id, result):
-        self.local_redis.rpush(RESULTS_KEY, serialize((gen_id, result)))
-        logger.debug('[worker] Pushed result for task {}'.format(gen_id))
+    def push_result(self, task_id, result):
+        self.local_redis.rpush(RESULTS_KEY, serialize((task_id, result)))
+        logger.debug('[worker] Pushed result for task {}'.format(task_id))
 
     # def pop_noise_list(self):
-    #     gen_id, noise_list = deserialize(self.master_redis.blpop(NOISES_KEY)[1])
-    #     return gen_id, noise_list
+    #     task_id, noise_list = deserialize(self.master_redis.blpop(NOISES_KEY)[1])
+    #     return task_id, noise_list

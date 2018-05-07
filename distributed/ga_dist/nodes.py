@@ -22,14 +22,14 @@ import subprocess
 logger = logging.getLogger(__name__)
 #logger.setLevel(logging.DEBUG)
 
-Task = namedtuple('Task', [])
+# Task = namedtuple('Task', [])
 
 Config = namedtuple('Config', [
     'global_seed', 'n_gens', 'n_nodes', 'init_tstep_limit','min_gen_time',
     'l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
     'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
     'return_proc_mode', 'episode_cutoff_mode', "adaptive_tstep_lim", 'tstep_lim_incr_ratio',
-    'n_parents', 'tstep_maxing_thresh', 'n_noise', "n_tsteps"
+    'n_parents', "n_elite_candidates", 'tstep_maxing_thresh', 'n_noise', "n_tsteps"
 ])
 
 Result = namedtuple('Result', [
@@ -40,12 +40,17 @@ Result = namedtuple('Result', [
     'n_seconds',
     'finish_time',
     'is_eval',
+    'gen_num',
 ])
 
 
 
 
-Gen = namedtuple('Gen', ['noise_lists', 'timestep_limit'])
+Task = namedtuple('Task', [
+    'parent_noise_lists',
+    'timestep_limit',
+    'gen_num'
+])
 
 def make_session(single_threaded):
     import tensorflow as tf
@@ -77,6 +82,7 @@ class Node:
                  master_host, master_port, relay_socket, master_pw, log_dir):
 
         # Initialize networking
+        # self.n_nodes = n_nodes
         self.master_port = master_port
         self.node_id = node_id
         if n_workers:
@@ -96,7 +102,9 @@ class Node:
 
         # Initialize the experiments
         self.config = Config(**self.exp['config'])
+        assert self.config.n_elite_candidates <= self.config.n_parents
         self.global_seed = self.config.global_seed
+
         #self.min_steps = self.config.min_steps
         #self.min_eps = self.config.min_eps
         self.noise = SharedNoiseTable(self.global_seed, self.config.n_noise)
@@ -105,10 +113,11 @@ class Node:
         # wouldn't necessarily give normally distributed samples!
 
         # Start worker processes
-        self.wps = []
-        for i in range(self.n_workers):
-            wp = Process(target= self.worker_process)
-            self.wps.append(wp)
+        # self.wps = []
+        for process_num in range(self.n_workers):
+            worker_id = node_id * self.n_workers + process_num
+            wp = Process(target= self.worker_process, args=(worker_id))
+            # self.wps.append(wp)
             wp.start()
 
     def get_n_workers(self):
@@ -116,12 +125,12 @@ class Node:
     # def get_master_redis_cfg(self, password):
     #     raise NotImplementedError
 
-    def worker_process(self):
+    def worker_process(self, worker_id):
         wc = WorkerClient(relay_redis_cfg=self.relay_redis_cfg)
-        # Set up the experiment
 
+        # Set up the experiment
         if self.exp['policy']['type'] == 'AtariPolicy':
-            env = wrap_deepmind(make_atari(self.exp["env_id"]), episode_life=False, clip_rewards=False, frame_stack=True, scale=True, )
+            env = wrap_deepmind(make_atari(self.exp["env_id"]), episode_life=False, clip_rewards=False, frame_stack=True, scale=True)
 
             # env = wrap_deepmind(make_atari(self.exp['env_id']), episode_life=True, clip_rewards=True, frame_stack=True, scale=True,)
         elif self.exp['policy']['type'] == 'MujocoPolicy':
@@ -136,25 +145,39 @@ class Node:
 
         tf_util.initialize()
         rs = np.random.RandomState()
-        worker_id = rs.randint(2 ** 31)
+
+
+        # my_candidates = []
+        # x = worker_id
+        # for i in range(self.config.n_elite_candidates):
+        #     for j in range(self.config.n_evals):
+        #         if (self.config.n_evals * i + j) % (self.n_nodes * self.n_workers) == worker_id:
+        #             my_candidates.append(i)
 
         eps_done = 0
+        # cached_gen_num = None
 
         while True:
-            # Grab generation data
-            gen_id, gen_data = wc.get_current_gen()
+            # Grab task data
+            task_id, task_data = wc.get_current_task()
 
-            assert isinstance(gen_id, int) and isinstance(gen_data, Gen)
-            assert isinstance(gen_data.noise_lists, list) and isinstance(gen_data.timestep_limit, int)
+            assert isinstance(task_id, int) and isinstance(task_data, Task)
+            assert isinstance(task_data.parent_noise_lists, list) and isinstance(task_data.timestep_limit, int)
+            assert isinstance(task_data.gen_num, int)
+            assert isinstance(task_data.eval_task, bool)
+            # if task_data.gen_num != cached_gen_num:
+            #     candidates_done = 0
+            #     cached_gen_num = task_data.gen_num
 
             # Prep for rollouts
             #noise_sublists, returns, lengths = [], [], []
             cycle_tstart = time.time()
             cycle_eps_done = 0
 
-            while cycle_eps_done <1 or time.time() - cycle_tstart < self.config.min_gen_time:
+            while cycle_eps_done < 1 or time.time() - cycle_tstart < self.config.min_gen_time: #\
+                    # or (candidates_done < len(my_candidates) and len(task_data.parent_noise_lists) != 0):
 
-                if len(gen_data.noise_lists) == 0:
+                if len(task_data.parent_noise_lists) == 0:
                     # First generation
 
                     new_idx = self.noise.sample_index(rs, policy.num_params)
@@ -167,12 +190,16 @@ class Node:
 
                 else:
 
-                    if rs.rand() < self.config.eval_prob:
-                        noise_list = gen_data.noise_lists[-1] # the elite
-                        is_eval = True
+                    # if candidates_done < len(my_candidates):
+                    #     candidate_num = my_candidates[candidates_done]
+                    #     noise_list = task_data.parent_noise_lists[-1 - candidate_num]
+                    #     candidates_done +=1
+                    #     is_eval = True
+                    if rs.rand()< self.config.eval_prob:
+                        to_eval =
                     else:
-                        parent_idx = rs.choice(len(gen_data.noise_lists))
-                        parent_noise_list = gen_data.noise_lists[parent_idx]
+                        parent_idx = rs.choice(len(task_data.parent_noise_lists))
+                        parent_noise_list = task_data.parent_noise_lists[parent_idx]
                         new_idx = self.noise.sample_index(rs, policy.num_params)
                         noise_list = parent_noise_list + [new_idx]
                         is_eval = False
@@ -193,16 +220,17 @@ class Node:
                 ret = float(np.sum(rewards))
                 finish_time = time.time()
                 n_seconds = float(finish_time - cycle_tstart)
-                logger.info('Eval result: gen_id={} return={:.3f} length={}'.format(
-                    gen_id, ret, n_steps))
-                wc.push_result(gen_id,
+                logger.info('Eval result: task_id={} return={:.3f} length={}'.format(
+                    task_id, ret, n_steps))
+                wc.push_result(task_id,
                                Result(worker_id=worker_id,
                                       noise_list=noise_list,
                                       ret=ret,
                                       n_steps=n_steps,
                                       n_seconds=n_seconds,
                                       finish_time=finish_time,
-                                      is_eval=is_eval))
+                                      is_eval=is_eval,
+                                      gen_num=task_data.gen_num))
                 cycle_eps_done += 1
 
             eps_done += cycle_eps_done
@@ -225,8 +253,9 @@ class MasterNode(Node):
             'n_seconds',
             'finish_time',
             'is_eval',
-            'worker_gen',
-            'master_gen']
+            'gen_num'
+            'worker_task_id',
+            'master_task_id']
 
     def begin_exp(self):
 
@@ -249,11 +278,11 @@ class MasterNode(Node):
         # Prepare for experiment
         self.master_client.declare_experiment(self.exp)
         parent_noise_lists, parent_rets = [], []
+        eval_noise_lists = []
         tstep_lim = self.config.init_tstep_limit
-        n_exp_gens, n_exp_eps, n_exp_steps = 0, 0, 0
-        elite_results = []
-        gen_nums = {}
-
+        gen_num, n_exp_eps, n_exp_steps = 0, 0, 0
+        elite_noise_lists = []
+        task_ids_set = set([])
         sess = make_session(single_threaded=True) # don't comment me out!
 
         #env = wrap_deepmind(make_atari(self.exp['env_id']), frame_stack=True, scale=True, episode_life=False, clip_rewards=False)
@@ -265,30 +294,26 @@ class MasterNode(Node):
         # Iterate over generations
         while n_exp_steps < self.config.n_tsteps:
 
-            gen_id, gen_num = self.master_client.declare_gen(
-                Gen(noise_lists=parent_noise_lists,
-                    timestep_limit=self.config.init_tstep_limit))
-            assert gen_id not in gen_nums
-            gen_nums[gen_id] = len(gen_nums)
-            # Count the number on the queue immediately after declaring the generation
-            gen_start_queue_size = self.master_client.master_redis.llen(RESULTS_KEY)
-            # We shouldn't get more than this number of bad episodes
+
             gen_tstart = time.time()
 
+            task_id = self.master_client.declare_task(
+                    Task(parent_noise_lists=parent_noise_lists,
+                         timestep_limit=self.config.init_tstep_limit,
+                         gen_num=gen_num))
             # Collect the generation (a lot of work)
-            results = self.collect_gen(gen_id, gen_start_queue_size)
+            results = self.collect_gen(gen_num)
 
-            gen_ids_set = set(gen_nums.keys())
-            results = [r for r in results if r['worker_gen_id'] in gen_ids_set]
+            task_ids_set.add(task_id)
+
+            # results = [r for r in results if r['worker_gen_id'] in task_ids_set]
             # All other nodes are now wasting compute for master from here!
-            mut_results =  [r for r in results if r['worker_gen_id']==gen_id and not r['is_eval']]
-            eval_results = [r for r in results if r['worker_gen_id']==gen_id and r['is_eval']]
-            for er in eval_results:
-                assert er['noise_list'] == elite_results[-1]['noise_list']
+            mut_results =  [r for r in results if r['worker_task_id']==task_id and not r['is_eval']]
+            mut_results.sort(key=lambda r: r['ret'])
 
             n_exp_eps += len(mut_results)
             n_exp_steps += sum([r['n_steps'] for r in mut_results])
-            n_exp_gens += 1
+            gen_num += 1
 
             # # Determine if the timestep limit needs to be increased
             # if self.config.adaptive_tstep_lim and \
@@ -299,19 +324,33 @@ class MasterNode(Node):
 
             # append previous best to new list: 'elitism'
 
-
-            mut_results.sort(key=lambda r: r['ret'])
-            if n_exp_gens >= 2:
-                # append the previous elite
-                sorted_w_elite = sorted(mut_results[-self.config.n_parents:]+[elite_results[-1]],
+            if gen_num >= 2:
+                eval_results_list = [r for r in results if r['worker_task_id'] == task_id and r['is_eval']]
+                # assert we have enough evals for each candidate
+                eval_counts = dict(zip(eval_noise_lists, [0 for _ in self.config.n_elite_candidates]))
+                eval_results = dict(zip(eval_noise_lists, [0 for _ in self.config.n_elite_candidates]))
+                for er in eval_results_list:
+                    eval_counts[er['noise_list']] += 1
+                    eval_results[er["noise_list"]].append(er["ret"])
+                elite_nl = eval_noise_lists[0]
+                top_score = None
+                for enl in eval_noise_lists:
+                    assert eval_counts[enl] == self.config.n_evals
+                    nl_mean = np.mean(eval_results[enl])
+                    if top_score is None or nl_mean > top_score:
+                        elite_nl = enl
+                        top_score = nl_mean
+                elite_noise_lists.append(elite_nl)
+                dummy_elite_result = {"noise_list":elite_nl,
+                                      "ret": top_score}
+                sorted_w_elite = sorted(mut_results[-self.config.n_parents:]+[dummy_elite_result],
                                         key = lambda x: x['ret'])
                 top_results = sorted_w_elite[-self.config.n_parents:]
             else:
                 top_results = mut_results[-self.config.n_parents:]
 
-            elite_results.append(top_results[-1])
-
             parent_noise_lists = [r['noise_list'] for r in top_results]
+            eval_noise_lists = parent_noise_lists[-self.config.n_elite_candidates:]
 
             # Compute the skip fraction
             n_bad_eps = len(results)-len(mut_results)-len(eval_results)
@@ -323,7 +362,7 @@ class MasterNode(Node):
             gen_tend = time.time()
 
             # Write the short logs
-            self.log_json(mut_results, eval_results, elite_results[-1], gen_tend,
+            self.log_json(mut_results, eval_results, elite_noise_lists[-1], gen_tend,
                           exp_tstart, gen_tstart,  skip_frac, n_exp_steps, n_exp_eps,
                           json_log_path)
 
@@ -332,7 +371,7 @@ class MasterNode(Node):
             self.log_csv(results, csv_log_path, gen_nums, exp_tstart)
 
 
-        logger.info("Finished {} generations in {} timesteps.".format(n_exp_gens, n_exp_steps))
+        logger.info("Finished {} generations in {} timesteps.".format(gen_num, n_exp_steps))
 
         # logger.info("Running elite eval gen")
         # # declare the elite eval gen
@@ -372,41 +411,42 @@ class MasterNode(Node):
         else:
             logger.info("Running on login node(s). Experiment finished. ")
 
-    # def collect_elite_gen(self, eval_gen_id, gen_start_queue_size, elite_noise_lists, n_elite_evals):
-    #
-    #     elite_genomes = ["-".join([str(x)for x in enl]) for enl in elite_noise_lists]
-    #
-    #     elite_rets = OrderedDict(zip(elite_genomes, [[] for eg in elite_genomes]))
-    #     elite_lens = OrderedDict(zip(elite_genomes, [[] for eg in elite_genomes]))
-    #
-    #     # Prep for new gen results
-    #     n_gen_eps, n_gen_steps, \
-    #     n_bad_eps, n_bad_steps, bad_time = 0, 0, 0, 0, 0
-    #
-    #     # Keep collecting results until we reach BOTH thresholds
-    #     while min([len(rets) for rets in elite_rets.values()])<n_elite_evals:
-    #         # Pop a result, accumulate if current gen, throw if past gen
-    #         worker_gen_id, r = self.master_client.pop_result()
-    #
-    #         if worker_gen_id == eval_gen_id:
-    #             n_gen_eps += 1
-    #             n_gen_steps += r.len
-    #             eg = "-".join([str(x)for x in r.noise_list])
-    #             elite_lens[eg].append(r.len)
-    #             elite_rets[eg].append(r.ret)
-    #         else:
-    #             n_bad_eps += 1
-    #             n_bad_steps += r.len
-    #             bad_time += r.time
-    #             assert n_bad_eps < gen_start_queue_size + 10000
-    #         logger.debug("n_gen_eps = {}, n_bad_eps = {}".format(n_gen_eps, n_bad_eps))
-    #
-    #     return n_gen_eps, n_gen_steps, n_bad_eps, n_bad_steps, bad_time,\
-    #            elite_genomes, elite_rets, elite_lens
 
-    def collect_gen(self, gen_id, gen_start_queue_size):
+    def collect_elite_gen(self, eval_gen_id, gen_start_queue_size, elite_noise_lists, n_elite_evals):
+
+        elite_genomes = ["-".join([str(x)for x in enl]) for enl in elite_noise_lists]
+
+        elite_rets = OrderedDict(zip(elite_genomes, [[] for eg in elite_genomes]))
+        elite_lens = OrderedDict(zip(elite_genomes, [[] for eg in elite_genomes]))
+
         # Prep for new gen results
-        n_mut_eps, n_mut_steps = 0, 0
+        n_gen_eps, n_gen_steps, \
+        n_bad_eps, n_bad_steps, bad_time = 0, 0, 0, 0, 0
+
+        while min([len(rets) for rets in elite_rets.values()])<n_elite_evals:
+            # Pop a result, accumulate if current gen, throw if past gen
+            worker_gen_id, r = self.master_client.pop_result()
+
+            if worker_gen_id == eval_gen_id:
+                n_gen_eps += 1
+                n_gen_steps += r.len
+                eg = "-".join([str(x)for x in r.noise_list])
+                elite_lens[eg].append(r.len)
+                elite_rets[eg].append(r.ret)
+            else:
+                n_bad_eps += 1
+                n_bad_steps += r.len
+                bad_time += r.time
+                assert n_bad_eps < gen_start_queue_size + 10000
+            logger.debug("n_gen_eps = {}, n_bad_eps = {}".format(n_gen_eps, n_bad_eps))
+
+        return n_gen_eps, n_gen_steps, n_bad_eps, n_bad_steps, bad_time,\
+               elite_genomes, elite_rets, elite_lens
+
+    def collect_gen(self, master_gen_num):
+        # Prep for new gen results
+        n_exp_eps, n_exp_steps = 0, 0
+
         # n_eval_eps, n_eval_steps = 0, 0
         # n_bad_eps, n_bad_steps, bad_time = 0, 0, 0, 0, 0, 0, 0
         # mut_rets, mut_lens, mut_times, mut_noise_lists = [], [], [], []
@@ -415,11 +455,15 @@ class MasterNode(Node):
 
         results = []
 
-        # Keep collecting results until we reach BOTH thresholds
-        while n_mut_eps < self.config.episodes_per_batch or \
-                n_mut_steps < self.config.timesteps_per_batch:
 
-            worker_gen_id, r = self.master_client.pop_result()
+        # assert task_id not in gen_nums.keys()
+        # gen_nums[task_id] = gen_num
+        # Count the number on the queue immediately after declaring the generation
+        # We shouldn't get more than this number of bad episodes
+        gen_start_queue_size = self.master_client.master_redis.llen(RESULTS_KEY)
+
+        while True:
+            worker_task_id, r = self.master_client.pop_result()
 
             result_dict = {'worker_id': r.worker_id,
                             'noise_list': r.noise_list,
@@ -428,19 +472,23 @@ class MasterNode(Node):
                             'n_seconds': r.n_seconds,
                             'finish_time': r.finish_time,
                             'is_eval': r.is_eval,
-                            'worker_gen_id': worker_gen_id,
-                            'master_gen_id': gen_id,}
+                            'worker_gen_num': r.gen_num,
+                            'master_gen_num': master_gen_num,}
             results.append(result_dict)
 
-            if worker_gen_id == gen_id and not r.is_eval:
-                n_mut_eps += 1
-                n_mut_steps += r.n_steps
+            if r.gen_num == master_gen_num:
+                n_exp_eps += 1
+                n_exp_steps += r.n_steps
+
+            # when one of the eval requirements is done
+            # change task
+
 
         return results
 
             # if r.is_eval:
             #
-            #     if worker_gen_id == gen_id:
+            #     if worker_gen_id == task_id:
             #         worker_id = r.worker_id
             #         if worker_id in worker_eps:
             #             worker_eps[worker_id] += 1
@@ -458,7 +506,7 @@ class MasterNode(Node):
             #         bad_time += r.n_millis
             #
             # else:
-            #     if worker_gen_id == gen_id:
+            #     if worker_gen_id == task_id:
             #         worker_id = r.worker_id
             #         if worker_id in worker_eps:
             #             worker_eps[worker_id] += 1

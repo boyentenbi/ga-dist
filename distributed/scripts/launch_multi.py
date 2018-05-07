@@ -63,7 +63,7 @@ ATARI_ENV_IDS = [
     "ZaxxonNoFrameskip-v4",]
 
 super_exp_id = time.strftime("%Y:%m:%d-%H:%M:%S")
-games = ["SkiingNoFrameskip-v4"]
+games = ["FrostbiteNoFrameskip-v4"]
 n_games = len(games)
 n_seeds = 5
 rnd = np.random.randint(2**31)

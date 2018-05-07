@@ -69,26 +69,31 @@ if __name__ == "__main__":
     if node_id==0:
         # This node contains the master
         master_node = MasterNode(
-            node_id,
-            8 if args.super_exp_id=="login_node_test" else 31,
-            exp,
-            master_host=node_name,
-            master_port=6379,
-            relay_socket='/tmp/es_redis_relay.sock',
-            master_pw= "deepbrickwindowattack",
-            log_dir=log_dir)
+                len(node_list),
+                node_id,
+                8 if args.super_exp_id == "login_node_test" else 32,
+                exp,
+                master_host=node_name,
+                master_port=6379,
+                relay_socket='/tmp/es_redis_relay.sock',
+                master_pw="deepbrickwindowattack",
+                log_dir=log_dir)
+
         master_node.begin_exp()
 
     else:
         # start the workers subscriptions
-        node = WorkerNode(node_id,
-                          31,
-                          exp,
-                          master_host=master_node_name,
-                          master_port=6379,
-                          relay_socket='/tmp/es_redis_relay.sock',
-                          master_pw= "deepbrickwindowattack",
-                          log_dir=log_dir)
+        node = WorkerNode(
+                len(node_list),
+                node_id,
+                32,
+                exp,
+                master_host=master_node_name,
+                master_port=6379,
+                relay_socket='/tmp/es_redis_relay.sock',
+                master_pw="deepbrickwindowattack",
+                log_dir=log_dir)
+
         logger.info("Node {} joining server.".format(node_id))
 
     print("Node {} done!".format(node_id))
