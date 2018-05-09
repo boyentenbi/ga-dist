@@ -8,11 +8,9 @@
     "init_tstep_limit":5000,
     "min_gen_time":0.2,
     "n_parents": 10,
-    "n_elite_candidates":10,
+    "n_elite_candidates":5,
     "n_evals": 2,
 
-    "n_gens": 10,
-    "n_nodes": 1,
     "return_proc_mode": "centered_rank",
     "episode_cutoff_mode": "env_default",
     "calc_obstat_prob": 0.01,

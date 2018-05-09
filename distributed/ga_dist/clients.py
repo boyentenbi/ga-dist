@@ -85,7 +85,7 @@ class MasterClient:
         logger.info('[master] Declared experiment {}'.format(pformat(exp)))
 
     # Declare a generation
-    def declare_task(self, task_data, gen_num):
+    def declare_task(self, task_data):
 
         #gen_num = self.gen_counter
         #self.gen_counter += 1
@@ -95,7 +95,7 @@ class MasterClient:
         # Serialize the data, ready to send
         gd = serialize(task_data)
         to_publish = serialize((task_id, gd))
-        logger.info("Declaring task {} for gen {}. serialized has size {}".format(task_id, gen_num, sys.getsizeof(to_publish)))
+        logger.info("Declaring task {} for gen {}. serialized has size {}".format(task_id, task_data.gen_num, sys.getsizeof(to_publish)))
 
         # Create the pipe and send both items at once
         p = self.master_redis.pipeline()
@@ -103,7 +103,7 @@ class MasterClient:
                 TASK_DATA_KEY:gd})
         p.publish(TASK_CHANNEL, to_publish) # TODO serialized serialized?
         p.execute()
-        logger.debug('[master] declared task {} for gen {}'.format(task_id, gen_num))
+        logger.debug('[master] declared task {} for gen {}'.format(task_id, task_data.gen_num))
         return task_id
 
     # Get a result from the relay redis

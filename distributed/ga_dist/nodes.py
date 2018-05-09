@@ -1,7 +1,7 @@
 import logging
 import os
 from clients import MasterClient, RelayClient, WorkerClient
-from clients import EXP_KEY, GEN_DATA_KEY, GEN_ID_KEY, TASK_CHANNEL, RESULTS_KEY
+from clients import EXP_KEY, TASK_DATA_KEY, TASK_ID_KEY, TASK_CHANNEL, RESULTS_KEY
 from multiprocessing import Process
 import json
 from queue import PriorityQueue
@@ -25,11 +25,22 @@ logger = logging.getLogger(__name__)
 # Task = namedtuple('Task', [])
 
 Config = namedtuple('Config', [
-    'global_seed', 'n_gens', 'n_nodes', 'init_tstep_limit','min_gen_time',
-    'l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
-    'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
+    "noise_stdev",
+    "n_noise",
+    "n_tsteps",
+    "episodes_per_batch",
+    "timesteps_per_batch",
+    "init_tstep_limit",
+    "min_gen_time",
+    "n_parents",
+    "n_elite_candidates",
+    "n_evals",
+    'global_seed',
+
+    'l2coeff',
+    'calc_obstat_prob', 'snapshot_freq',
     'return_proc_mode', 'episode_cutoff_mode', "adaptive_tstep_lim", 'tstep_lim_incr_ratio',
-    'n_parents', "n_elite_candidates", 'tstep_maxing_thresh', 'n_noise', "n_tsteps"
+    'tstep_maxing_thresh',
 ])
 
 Result = namedtuple('Result', [
@@ -78,11 +89,11 @@ class SharedNoiseTable(object):
 
 
 class Node:
-    def __init__(self, node_id, n_workers, exp,
+    def __init__(self, n_nodes, node_id, n_workers, exp,
                  master_host, master_port, relay_socket, master_pw, log_dir):
 
         # Initialize networking
-        # self.n_nodes = n_nodes
+        self.n_nodes = n_nodes
         self.master_port = master_port
         self.node_id = node_id
         if n_workers:
@@ -116,7 +127,7 @@ class Node:
         # self.wps = []
         for process_num in range(self.n_workers):
             worker_id = node_id * self.n_workers + process_num
-            wp = Process(target= self.worker_process, args=(worker_id))
+            wp = Process(target= self.worker_process, args=(worker_id,))
             # self.wps.append(wp)
             wp.start()
 
@@ -146,16 +157,15 @@ class Node:
         tf_util.initialize()
         rs = np.random.RandomState()
 
-
-        # my_candidates = []
-        # x = worker_id
-        # for i in range(self.config.n_elite_candidates):
-        #     for j in range(self.config.n_evals):
-        #         if (self.config.n_evals * i + j) % (self.n_nodes * self.n_workers) == worker_id:
-        #             my_candidates.append(i)
+        # Allocate candidates to this worker
+        my_candidates = []
+        for i in range(self.config.n_elite_candidates):
+            for j in range(self.config.n_evals):
+                if (self.config.n_evals * i + j) % (self.n_nodes * self.n_workers) == worker_id:
+                    my_candidates.append(i)
 
         eps_done = 0
-        # cached_gen_num = None
+        cached_gen_num = None
 
         while True:
             # Grab task data
@@ -164,18 +174,21 @@ class Node:
             assert isinstance(task_id, int) and isinstance(task_data, Task)
             assert isinstance(task_data.parent_noise_lists, list) and isinstance(task_data.timestep_limit, int)
             assert isinstance(task_data.gen_num, int)
-            assert isinstance(task_data.eval_task, bool)
-            # if task_data.gen_num != cached_gen_num:
-            #     candidates_done = 0
-            #     cached_gen_num = task_data.gen_num
+            # assert isinstance(task_data.eval_task, bool)
+
+            # new generation, reset candidates_done
+            if task_data.gen_num != cached_gen_num:
+                candidates_done = 0
+                cached_gen_num = task_data.gen_num
 
             # Prep for rollouts
             #noise_sublists, returns, lengths = [], [], []
+
             cycle_tstart = time.time()
             cycle_eps_done = 0
 
-            while cycle_eps_done < 1 or time.time() - cycle_tstart < self.config.min_gen_time: #\
-                    # or (candidates_done < len(my_candidates) and len(task_data.parent_noise_lists) != 0):
+            while cycle_eps_done < 1 or time.time() - cycle_tstart < self.config.min_gen_time \
+                    or (candidates_done < len(my_candidates) and len(task_data.parent_noise_lists) != 0):
 
                 if len(task_data.parent_noise_lists) == 0:
                     # First generation
@@ -190,13 +203,11 @@ class Node:
 
                 else:
 
-                    # if candidates_done < len(my_candidates):
-                    #     candidate_num = my_candidates[candidates_done]
-                    #     noise_list = task_data.parent_noise_lists[-1 - candidate_num]
-                    #     candidates_done +=1
-                    #     is_eval = True
-                    if rs.rand()< self.config.eval_prob:
-                        to_eval =
+                    if candidates_done < len(my_candidates):
+                        candidate_num = my_candidates[candidates_done]
+                        noise_list = task_data.parent_noise_lists[-1 - candidate_num]
+                        candidates_done +=1
+                        is_eval = True
                     else:
                         parent_idx = rs.choice(len(task_data.parent_noise_lists))
                         parent_noise_list = task_data.parent_noise_lists[parent_idx]
@@ -209,7 +220,6 @@ class Node:
                     v = init_params
                     for j in noise_list[1:]:
                         v += self.config.noise_stdev * self.noise.get(j, policy.num_params)
-
 
                 policy.set_trainable_flat(v)
                 rewards, n_steps = policy.rollout(env, timestep_limit=self.config.init_tstep_limit)
@@ -237,11 +247,11 @@ class Node:
 
 # The master node also has worker processes
 class MasterNode(Node):
-    def __init__(self, node_id, n_workers, exp,
+    def __init__(self, n_nodes, node_id, n_workers, exp,
                  master_host, master_port, relay_socket, master_pw, log_dir):
 
         # Initialize networking
-        super().__init__(node_id, n_workers, exp,
+        super().__init__(n_nodes, node_id, n_workers, exp,
                          master_host, master_port, relay_socket, master_pw, log_dir)
         logger.info("Node {} contains the master client.".format(self.node_id))
         self.master_client = MasterClient(self.master_redis_cfg)
@@ -253,8 +263,8 @@ class MasterNode(Node):
             'n_seconds',
             'finish_time',
             'is_eval',
-            'gen_num'
-            'worker_task_id',
+            'worker_gen',
+            'worker_task_id'
             'master_task_id']
 
     def begin_exp(self):
@@ -278,7 +288,7 @@ class MasterNode(Node):
         # Prepare for experiment
         self.master_client.declare_experiment(self.exp)
         parent_noise_lists, parent_rets = [], []
-        eval_noise_lists = []
+        candidate_noise_lists = []
         tstep_lim = self.config.init_tstep_limit
         gen_num, n_exp_eps, n_exp_steps = 0, 0, 0
         elite_noise_lists = []
@@ -294,22 +304,26 @@ class MasterNode(Node):
         # Iterate over generations
         while n_exp_steps < self.config.n_tsteps:
 
-
             gen_tstart = time.time()
 
             task_id = self.master_client.declare_task(
                     Task(parent_noise_lists=parent_noise_lists,
                          timestep_limit=self.config.init_tstep_limit,
                          gen_num=gen_num))
-            # Collect the generation (a lot of work)
-            results = self.collect_gen(gen_num)
-
+            assert task_id not in task_ids_set
             task_ids_set.add(task_id)
+            # Collect the generation (a lot of work)
+            results = self.collect_gen(task_id, gen_num)
+
 
             # results = [r for r in results if r['worker_gen_id'] in task_ids_set]
             # All other nodes are now wasting compute for master from here!
             mut_results =  [r for r in results if r['worker_task_id']==task_id and not r['is_eval']]
             mut_results.sort(key=lambda r: r['ret'])
+            eval_results = [r for r in results if r['worker_task_id'] == task_id and r['is_eval']]
+
+            top_results = mut_results[-self.config.n_parents:]
+            parent_noise_lists = [r['noise_list'] for r in top_results]
 
             n_exp_eps += len(mut_results)
             n_exp_steps += sum([r['n_steps'] for r in mut_results])
@@ -325,32 +339,41 @@ class MasterNode(Node):
             # append previous best to new list: 'elitism'
 
             if gen_num >= 2:
-                eval_results_list = [r for r in results if r['worker_task_id'] == task_id and r['is_eval']]
+                cnl_strings = ["-".join([str(idx) for idx in cnl]) for cnl in candidate_noise_lists]
                 # assert we have enough evals for each candidate
-                eval_counts = dict(zip(eval_noise_lists, [0 for _ in self.config.n_elite_candidates]))
-                eval_results = dict(zip(eval_noise_lists, [0 for _ in self.config.n_elite_candidates]))
-                for er in eval_results_list:
-                    eval_counts[er['noise_list']] += 1
-                    eval_results[er["noise_list"]].append(er["ret"])
-                elite_nl = eval_noise_lists[0]
-                top_score = None
-                for enl in eval_noise_lists:
-                    assert eval_counts[enl] == self.config.n_evals
-                    nl_mean = np.mean(eval_results[enl])
-                    if top_score is None or nl_mean > top_score:
-                        elite_nl = enl
-                        top_score = nl_mean
-                elite_noise_lists.append(elite_nl)
-                dummy_elite_result = {"noise_list":elite_nl,
-                                      "ret": top_score}
-                sorted_w_elite = sorted(mut_results[-self.config.n_parents:]+[dummy_elite_result],
-                                        key = lambda x: x['ret'])
-                top_results = sorted_w_elite[-self.config.n_parents:]
-            else:
-                top_results = mut_results[-self.config.n_parents:]
+                eval_results_agg = dict(zip(cnl_strings, [{"count":0,
+                                                          "rets":[],
+                                                          "lens":[]} for _ in range(self.config.n_elite_candidates)]))
 
-            parent_noise_lists = [r['noise_list'] for r in top_results]
-            eval_noise_lists = parent_noise_lists[-self.config.n_elite_candidates:]
+                for er in eval_results:
+                    cnl_string = "-".join([str(idx) for idx in er["noise_list"]])
+
+                    eval_results_agg[cnl_string]["count"] += 1
+                    eval_rets_dict[cnl_string]["rets"].append(er["ret"])
+                    eval_lens_dict[cnl_string]["lens"].append(er["len"])
+
+                elite_noise_list = candidate_noise_lists[0] # initialization (not final!)
+                top_mean = None
+                for cnl_str, data in eval_results_agg:
+                    assert data["count"] == self.config.n_evals
+                    data["mean_ret"] = np.mean(data["rets"])
+                    if not top_mean or data["mean_ret"] >= top_mean:
+                        top_mean = data["mean_ret"]
+                        elite_noise_list = [int(x) for x in cnl_str.split("-")]
+                assert elite_noise_list in candidate_noise_lists
+
+                elite_noise_lists.append(elite_noise_list)
+                parent_noise_lists.append(elite_noise_list)  # this is actually the elite from the prev
+                # dummy_elite_result = {"noise_list":elite_nl,
+                #                       "ret": top_score}
+                # sorted_w_elite = sorted(mut_results[-self.config.n_parents:]+[dummy_elite_result],
+                #                         key = lambda x: x['ret'])
+            else:
+                eval_rets_dict = {}
+                eval_lens_dict = {}
+                elite_noise_list = None
+                top_mean = None
+            candidate_noise_lists = parent_noise_lists[-self.config.n_elite_candidates:]
 
             # Compute the skip fraction
             n_bad_eps = len(results)-len(mut_results)-len(eval_results)
@@ -362,13 +385,15 @@ class MasterNode(Node):
             gen_tend = time.time()
 
             # Write the short logs
-            self.log_json(mut_results, eval_results, elite_noise_lists[-1], gen_tend,
-                          exp_tstart, gen_tstart,  skip_frac, n_exp_steps, n_exp_eps,
+            self.log_json(mut_results,  eval_results,
+                          eval_rets_dict, eval_lens_dict,
+                          elite_noise_list,
+                          gen_tend, gen_tstart,  skip_frac, exp_tstart, n_exp_steps, n_exp_eps,
                           json_log_path)
 
             # Record literally everything
             # This should only be ~ 5MB for an entire experiment
-            self.log_csv(results, csv_log_path, gen_nums, exp_tstart)
+            self.log_csv(results, csv_log_path, gen_num, exp_tstart)
 
 
         logger.info("Finished {} generations in {} timesteps.".format(gen_num, n_exp_steps))
@@ -412,38 +437,38 @@ class MasterNode(Node):
             logger.info("Running on login node(s). Experiment finished. ")
 
 
-    def collect_elite_gen(self, eval_gen_id, gen_start_queue_size, elite_noise_lists, n_elite_evals):
+    # def collect_elite_gen(self, eval_gen_id, gen_start_queue_size, elite_noise_lists, n_elite_evals):
+    #
+    #     elite_genomes = ["-".join([str(x)for x in enl]) for enl in elite_noise_lists]
+    #
+    #     elite_rets = OrderedDict(zip(elite_genomes, [[] for eg in elite_genomes]))
+    #     elite_lens = OrderedDict(zip(elite_genomes, [[] for eg in elite_genomes]))
+    #
+    #     # Prep for new gen results
+    #     n_gen_eps, n_gen_steps, \
+    #     n_bad_eps, n_bad_steps, bad_time = 0, 0, 0, 0, 0
+    #
+    #     while min([len(rets) for rets in elite_rets.values()])<n_elite_evals:
+    #         # Pop a result, accumulate if current gen, throw if past gen
+    #         worker_gen_id, r = self.master_client.pop_result()
+    #
+    #         if worker_gen_id == eval_gen_id:
+    #             n_gen_eps += 1
+    #             n_gen_steps += r.len
+    #             eg = "-".join([str(x)for x in r.noise_list])
+    #             elite_lens[eg].append(r.len)
+    #             elite_rets[eg].append(r.ret)
+    #         else:
+    #             n_bad_eps += 1
+    #             n_bad_steps += r.len
+    #             bad_time += r.time
+    #             assert n_bad_eps < gen_start_queue_size + 10000
+    #         logger.debug("n_gen_eps = {}, n_bad_eps = {}".format(n_gen_eps, n_bad_eps))
+    #
+    #     return n_gen_eps, n_gen_steps, n_bad_eps, n_bad_steps, bad_time,\
+    #            elite_genomes, elite_rets, elite_lens
 
-        elite_genomes = ["-".join([str(x)for x in enl]) for enl in elite_noise_lists]
-
-        elite_rets = OrderedDict(zip(elite_genomes, [[] for eg in elite_genomes]))
-        elite_lens = OrderedDict(zip(elite_genomes, [[] for eg in elite_genomes]))
-
-        # Prep for new gen results
-        n_gen_eps, n_gen_steps, \
-        n_bad_eps, n_bad_steps, bad_time = 0, 0, 0, 0, 0
-
-        while min([len(rets) for rets in elite_rets.values()])<n_elite_evals:
-            # Pop a result, accumulate if current gen, throw if past gen
-            worker_gen_id, r = self.master_client.pop_result()
-
-            if worker_gen_id == eval_gen_id:
-                n_gen_eps += 1
-                n_gen_steps += r.len
-                eg = "-".join([str(x)for x in r.noise_list])
-                elite_lens[eg].append(r.len)
-                elite_rets[eg].append(r.ret)
-            else:
-                n_bad_eps += 1
-                n_bad_steps += r.len
-                bad_time += r.time
-                assert n_bad_eps < gen_start_queue_size + 10000
-            logger.debug("n_gen_eps = {}, n_bad_eps = {}".format(n_gen_eps, n_bad_eps))
-
-        return n_gen_eps, n_gen_steps, n_bad_eps, n_bad_steps, bad_time,\
-               elite_genomes, elite_rets, elite_lens
-
-    def collect_gen(self, master_gen_num):
+    def collect_gen(self, master_task_id, master_gen_num):
         # Prep for new gen results
         n_exp_eps, n_exp_steps = 0, 0
 
@@ -462,7 +487,11 @@ class MasterNode(Node):
         # We shouldn't get more than this number of bad episodes
         gen_start_queue_size = self.master_client.master_redis.llen(RESULTS_KEY)
 
-        while True:
+        while n_exp_eps < self.config.episodes_per_batch or \
+                n_exp_steps < self.config.timesteps_per_batch:
+            # Continue if results not full
+            # Do I want to count evals in number of eps done?
+            # Yes since used to choose elite
             worker_task_id, r = self.master_client.pop_result()
 
             result_dict = {'worker_id': r.worker_id,
@@ -472,11 +501,13 @@ class MasterNode(Node):
                             'n_seconds': r.n_seconds,
                             'finish_time': r.finish_time,
                             'is_eval': r.is_eval,
-                            'worker_gen_num': r.gen_num,
-                            'master_gen_num': master_gen_num,}
-            results.append(result_dict)
+                            'worker_gen': r.gen_num,
+                            'worker_task_id':worker_task_id,
+                            'master_task_id':master_task_id}
 
-            if r.gen_num == master_gen_num:
+            results.append(result_dict)
+            if master_task_id == worker_task_id:
+                assert r.gen_num == master_gen_num
                 n_exp_eps += 1
                 n_exp_steps += r.n_steps
 
@@ -539,7 +570,7 @@ class MasterNode(Node):
                 tlogger.record_tabular(quantity, value)
         tlogger.dump_tabular()
 
-    def log_csv(self, results, csv_log_path, gen_nums, exp_tstart):
+    def log_csv(self, results, csv_log_path, gen_num, exp_tstart):
 
         saveable_results = []
         for r in results:
@@ -550,8 +581,9 @@ class MasterNode(Node):
                         'n_seconds'   : r['n_seconds'],
                         'finish_time': r['finish_time']-exp_tstart,
                         'is_eval'    : r['is_eval'],
-                        'worker_gen' : gen_nums[r['worker_gen_id']],
-                        'master_gen' : gen_nums[r['master_gen_id']], }
+                        'worker_gen' : r['worker_gen'],
+                        'worker_task_id' : r['worker_task_id'],
+                        'master_task_id': r['master_task_id'] }
             saveable_results.append(row_dict)
 
         with open(csv_log_path, 'a') as f:
@@ -565,19 +597,27 @@ class MasterNode(Node):
                                         'finish_time',
                                         'is_eval',
                                         'worker_gen',
-                                        'master_gen'
+                                        'worker_task_id',
+                                        'master_task_id',
                                     ])
             writer.writerows(saveable_results)
 
 
-    def log_json(self, mut_results, eval_results, elite_result, gen_tend,
-                 exp_tstart, gen_tstart, skip_frac, n_exp_steps, n_exp_eps,
-                 json_log_path):
+    def log_json(self, mut_results, eval_results,
+                 eval_rets_dict, eval_lens_dict,
+                          elite_noise_list,
+                          gen_tend, gen_tstart,  skip_frac, exp_tstart, n_exp_steps, n_exp_eps,
+                          json_log_path):
 
-        eval_rets = [r['ret'] for r in eval_results]
-        eval_lens = [r['n_steps'] for r in eval_results]
+        # eval_rets = [r['ret'] for r in eval_results]
+        # eval_lens = [r['n_steps'] for r in eval_results]
         mut_rets = [r['ret'] for r in mut_results]
         mut_lens = [r['n_steps'] for r in mut_results]
+        elite_rets = eval_rets_dict[elite_noise_list] if elite_noise_list else None
+        elite_lens = eval_lens_dict[elite_noise_list] if elite_noise_list else None
+
+        # eval_eps = [len(x) for x in eval_lens_dict.values()]
+        eval_means = [np.mean(x) for x in elite_rets.values()] if elite_rets else None
 
         unique_workers = set([r['worker_id'] for r in mut_results + eval_results])
         worker_eps = {}
@@ -585,16 +625,23 @@ class MasterNode(Node):
             worker_eps[w] = len([r for r in mut_results + eval_results if r['worker_id'] == w])
         weps = np.asarray([x for x in worker_eps.values()])
         d=\
-        {'EvalRetMax': None if not eval_rets else float(np.max(eval_rets)),
-         'EvalRetMed': None if not eval_rets else float(np.median(eval_rets)),
-         'EvalRetMin': None if not eval_rets else float(np.min(eval_rets)),
+        {'EliteRetMax': None if not elite_rets else float(np.max(elite_rets)),
+         'EliteRetMed': None if not elite_rets else float(np.median(elite_rets)),
+         'EliteRetMin': None if not elite_rets else float(np.min(elite_rets)),
 
-         'EvalLenMax': None if not eval_lens else int(np.max(eval_lens)),
-         'EvalLenMed': None if not eval_lens else int(np.median(eval_lens)),
-         'EvalLenMin': None if not eval_lens else int(np.min(eval_lens)),
+         'EliteLenMax': None if not elite_lens else int(np.max(elite_lens)),
+         'EliteLenMed': None if not elite_lens else int(np.median(elite_lens)),
+         'EliteLenMin': None if not elite_lens else int(np.min(elite_lens)),
 
-         'EvalEps': len(eval_results),
-         'EvalSteps': sum(eval_lens),
+         # 'EvalEpsMax': None if not eval_eps else np.max(eval_eps),
+         # 'EvalEpsMed': None if not eval_eps else np.median(eval_eps),
+         # 'EvalEpsMin': None if not eval_eps else np.min(eval_eps),
+
+         'EvalMeanMax': None if not eval_means else np.max(eval_means),
+         'EvalMeanMed': None if not eval_means else np.median(eval_means),
+         'EvalMeanMin': None if not eval_means else np.min(eval_means),
+
+         # 'EliteSteps': sum(eval_lens),
 
          "MutRetMax": None if not mut_rets else float(np.max(mut_rets)),
          "MutRetParentMin": None if not mut_rets else float(mut_rets[-self.config.n_parents]),
@@ -620,7 +667,7 @@ class MasterNode(Node):
          "TimeElapsedThisIter": float(gen_tend - gen_tstart),
          "TimeElapsed": float(gen_tend - exp_tstart),
 
-         "TopGenome": "-".join(map(str, elite_result['noise_list']))
+         "EliteGenome": None if not elite_noise_list else "-".join(map(str, elite_noise_list))
          }
 
         with open(json_log_path, 'r') as f:
@@ -641,9 +688,9 @@ class MasterNode(Node):
 
 
 class WorkerNode(Node):
-    def __init__(self, node_id, n_workers, exp,
+    def __init__(self, n_nodes, node_id, n_workers, exp,
                  master_host, master_port, relay_socket, master_pw, log_dir):
-        super().__init__(node_id, n_workers, exp,
+        super().__init__(n_nodes, node_id, n_workers, exp,
                          master_host, master_port, relay_socket, master_pw, log_dir)
 
         logger.info("Node {} is a worker node".format(self.node_id))
