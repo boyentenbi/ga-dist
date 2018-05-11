@@ -71,7 +71,7 @@ if __name__ == "__main__":
         master_node = MasterNode(
                 len(node_list),
                 node_id,
-                8 if args.super_exp_id == "login_node_test" else 32,
+                26 if args.super_exp_id == "login_node_test" else 31, # NOT 32!
                 exp,
                 master_host=node_name,
                 master_port=6379,
@@ -86,7 +86,7 @@ if __name__ == "__main__":
         node = WorkerNode(
                 len(node_list),
                 node_id,
-                32,
+                31, # NOT 32!
                 exp,
                 master_host=master_node_name,
                 master_port=6379,

@@ -89,8 +89,9 @@ class MasterClient:
 
         #gen_num = self.gen_counter
         #self.gen_counter += 1
+        rs = np.random.RandomState()
 
-        task_id = np.random.randint(2**31)
+        task_id = rs.randint(2**31)
 
         # Serialize the data, ready to send
         gd = serialize(task_data)
