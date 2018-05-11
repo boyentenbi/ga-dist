@@ -63,7 +63,26 @@ ATARI_ENV_IDS = [
     "ZaxxonNoFrameskip-v4",]
 
 super_exp_id = time.strftime("%Y:%m:%d-%H:%M:%S")
-games = ["FrostbiteNoFrameskip-v4"]
+games = ["FrostbiteNoFrameskip-v4",
+         "SkiingNoFrameskip-v4",
+         "VentureNoFrameskip-v4",
+         "KangarooNoFrameskip-v4",
+         "GravitarNoFrameskip-v4",
+         "AsteroidsNoFrameskip-v4",
+         "ZaxxonNoFrameskip-v4",
+         "AmidarNoFrameskip-v4",
+         "AssaultNoFrameskip-v4",
+         "AsterixNoFrameskip-v4",
+         "SeaquestNoFrameskip-v4",
+         "EnduroNoFrameskip-v4",
+         "AtlantisNoFrameskip-v4"]
+
+from gym import envs
+all_envs = envs.registry.all()
+env_ids = [env_spec.id for env_spec in all_envs]
+for env_id in games:
+    assert env_id in env_ids
+
 n_games = len(games)
 n_seeds = 5
 rnd = np.random.randint(2**31)

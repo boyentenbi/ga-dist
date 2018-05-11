@@ -326,17 +326,14 @@ class MasterNode(Node):
             cnl_strings = ["-".join([str(idx) for idx in cnl]) for cnl in candidate_noise_lists]
             results = self.collect_gen(task_id, gen_num, cnl_strings, exp_tstart)
 
-
             # results = [r for r in results if r['worker_gen_id'] in task_ids_set]
             # All other nodes are now wasting compute for master from here!
             mut_results =  [r for r in results if r['is_valid'] and not r['is_eval']]
             mut_results.sort(key=lambda r: r['ret'])
             eval_results = [r for r in results if r['is_valid'] and r['is_eval']]
 
-
             n_exp_eps += len(mut_results+eval_results)
             n_exp_steps += sum([r['n_steps'] for r in mut_results+eval_results])
-
 
             # # Determine if the timestep limit needs to be increased
             # if self.config.adaptive_tstep_lim and \
