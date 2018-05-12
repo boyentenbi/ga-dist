@@ -1,45 +1,29 @@
 
-# core modules
-import random
-import math
 
 # 3rd party modules
 import gym
 import numpy as np
 from gym import spaces
 
-
-def get_chance(x):
-    """Get probability that a banana will be sold at price x."""
-    e = math.exp(1)
-    return (1.0 + e) / (1. + math.exp(x + 1))
-
-
-
 class MetaBanditEnv(gym.Env):
 
 
-    def __init__(self, n_levers, n_eps):
+    def __init__(self):
         self.__version__ = "0.1.0"
-        print("BananaEnv - Version {}".format(self.__version__))
+        print("MetaBanditEnv - Version {}".format(self.__version__))
 
         # General variables defining the environment
-        self.n_levers = n_levers
-        self.n_eps = n_eps
+        self.n_levers = 2
+        self.n_eps = 10
         self.ps = np.random.rand(self.n_levers)
 
         self.current_ep = 0
-
+        self.history = []
         self.prev_action_idx = None
         self.prev_reward = None
         self.action_space = spaces.Discrete(self.n_levers)
 
-        # Observation is the remaining time
-        high = np.array([self.TOTAL_TIME_STEPS,  # remaining_tries
-                         ])
-        low = np.array([0.0,  # remaining_tries
-                        ])
-        self.observation_space = spaces.Tuple((spaces.Discrete(n_levers), # Previous action taken
+        self.observation_space = spaces.Tuple((spaces.Discrete(self.n_levers), # Previous action taken
                                                spaces.Box(np.array([0, 0 ]), np.array([1., self.n_eps])), # Previous reward, eps remaining
                                                ))
 
@@ -77,14 +61,9 @@ class MetaBanditEnv(gym.Env):
         ob = self._get_state()
         self.current_ep += 1
         done = self.current_ep == self.n_eps
-        return ob, reward, self.is_banana_sold, {}
+        info = {}
+        return ob, reward, done, info
 
-    def _get_reward(self):
-        """Reward is given for a sold banana."""
-        if self.is_banana_sold:
-            return self.price - 1
-        else:
-            return 0.0
 
     def _reset(self):
         """
@@ -101,6 +80,7 @@ class MetaBanditEnv(gym.Env):
         self.prev_reward = None
 
         self.curr_episode = 0
+        self.history = []
         return self._get_state()
 
     def _render(self, mode='human', close=False):
@@ -110,11 +90,8 @@ class MetaBanditEnv(gym.Env):
         """Get the observation."""
         x = np.zeros(self.n_levers)
         x[self.prev_action_idx] = 1.
-        ob = np.concatenate([x, [self.prev_reward], ])
+        ob = (x, [self.prev_reward, self.n_eps-self.current_ep],)
         return ob
 
-    def _seed(self, seed):
-        random.seed(seed)
-        np.random.seed
 
 

@@ -12,6 +12,8 @@ import gym
 from baselines import deepq
 from baselines.common.atari_wrappers import  make_atari, wrap_deepmind
 
+import gym_meta_bandit
+# gym.make("MetaBanditEnv-v0")
 gym.undo_logger_setup()
 import policies, tf_util
 from collections import namedtuple, OrderedDict
@@ -152,6 +154,8 @@ class Node:
 
             # env = wrap_deepmind(make_atari(self.exp['env_id']), episode_life=True, clip_rewards=True, frame_stack=True, scale=True,)
         elif self.exp['policy']['type'] == 'MujocoPolicy':
+            env = gym.make(self.exp['env_id'])
+        elif self.exp['policy']['type'] == 'TimeConvDiscreteOutPolicy':
             env = gym.make(self.exp['env_id'])
         else:
             raise NotImplementedError("This type of policy is not supported yet")

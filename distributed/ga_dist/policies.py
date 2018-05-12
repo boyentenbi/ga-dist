@@ -424,6 +424,111 @@ class DiscretePolicy(Policy):
         if ob_stat is not None:
             ob_stat.set_from_init(init_mean, init_std, init_count=1e5)
 
+class TemporalConvDiscreteOutPolicy(Policy):
+    def _initialize(self, ob_space, ac_space, kernel_sizes, strides, n_channels, hidden_dims, nonlin_type):
+        self.ac_space = ac_space
+        self.hidden_dims = hidden_dims
+        self.kernel_sizes = kernel_sizes
+        self.strides = strides
+        self.n_channels = n_channels
+
+        assert len(kernel_sizes)==len(strides)==len(n_channels)
+
+        assert len(ob_space.shape) == 3
+        assert len(self.ac_space.shape) == 0
+        # assert np.all(np.isfinite(self.ac_space.low)) and np.all(np.isfinite(self.ac_space.high)), \
+        #     'Action bounds required'
+
+        self.nonlin = {'tanh': tf.tanh,
+                       'relu': tf.nn.relu,
+                       'lrelu': U.lrelu,
+                       'elu': tf.nn.elu}[nonlin_type]
+
+        with tf.variable_scope(type(self).__name__) as scope:
+            # Observation normalization
+            # ob_mean = tf.get_variable(
+            #     'ob_mean', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
+            # ob_std = tf.get_variable(
+            #     'ob_std', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
+            # in_mean = tf.placeholder(tf.float32, ob_space.shape)
+            # in_std = tf.placeholder(tf.float32, ob_space.shape)
+            # self._set_ob_mean_std = U.function([in_mean, in_std], [], updates=[
+            #     tf.assign(ob_mean, in_mean),
+            #     tf.assign(ob_std, in_std),
+            # ])
+
+            # Policy network
+            #logger.info("Observation space has shape {}".format(ob_space.shape))
+            o = tf.placeholder(tf.float32, [None] + list(ob_space.shape))
+            a = self._make_net(o)
+            self._act = U.function([o], a)
+        return scope
+
+    def _make_net(self, o):
+        # Process observation
+        x = o
+
+        for iconv, kernel_size, stride, channel_dim in zip(range(len(self.kernel_sizes)), self.kernel_sizes, self.strides, self.n_channels):
+            x = tf.layers.conv2d(x, channel_dim, kernel_size, stride, padding="SAME", name="conv{}".format(iconv))
+
+        y = U.flattenallbut0(x)
+
+        for ihidden, n_hidden in enumerate(self.hidden_dims):
+            y = tf.layers.dense(y, n_hidden, self.nonlin, 'h{}'.format(ihidden))
+
+        # Map to action
+        a_dim = self.ac_space.n
+        logits = tf.layers.dense(y, a_dim)
+        a=tf.argmax(logits,1)
+
+        return a
+
+    def act(self, ob, random_stream=None):
+        return self._act(ob)
+
+    @property
+    def needs_ob_stat(self):
+        return False
+
+    @property
+    def needs_ref_batch(self):
+        return False
+
+    def set_ob_stat(self, ob_mean, ob_std):
+        self._set_ob_mean_std(ob_mean, ob_std)
+
+    def initialize_from(self, filename, ob_stat=None):
+        """
+        Initializes weights from another policy, which must have the same architecture (variable names),
+        but the weight arrays can be smaller than the current policy.
+        """
+        with h5py.File(filename, 'r') as f:
+            f_var_names = []
+            f.visititems(lambda name, obj: f_var_names.append(name) if isinstance(obj, h5py.Dataset) else None)
+            assert set(v.name for v in self.all_variables) == set(f_var_names), 'Variable names do not match'
+
+            init_vals = []
+            for v in self.all_variables:
+                shp = v.get_shape().as_list()
+                f_shp = f[v.name].shape
+                assert len(shp) == len(f_shp) and all(a >= b for a, b in zip(shp, f_shp)), \
+                    'This policy must have more weights than the policy to load'
+                init_val = v.eval()
+                # ob_mean and ob_std are initialized with nan, so set them manually
+                if 'ob_mean' in v.name:
+                    init_val[:] = 0
+                    init_mean = init_val
+                elif 'ob_std' in v.name:
+                    init_val[:] = 0.001
+                    init_std = init_val
+                # Fill in subarray from the loaded policy
+                init_val[tuple([np.s_[:s] for s in f_shp])] = f[v.name]
+                init_vals.append(init_val)
+            self.set_all_vars(*init_vals)
+
+        if ob_stat is not None:
+            ob_stat.set_from_init(init_mean, init_std, init_count=1e5)
+
 class AtariPolicy(Policy):
     def _initialize(self, ob_space, ac_space, kernel_sizes, strides, n_channels, hidden_dims, nonlin_type):
         self.ac_space = ac_space
