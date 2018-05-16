@@ -1,0 +1,28 @@
+{
+  "config": {
+    "noise_stdev": 0.005,
+    "n_noise": 250000000,
+    "n_tsteps":250000000,
+    "episodes_per_batch": 10000,
+    "timesteps_per_batch": 1000,
+    "init_tstep_limit":100,
+    "min_gen_time":0.2,
+    "n_parents": 200,
+    "n_elite_candidates": 100,
+    "n_evals": 50,
+    "n_redundant_evals": 20
+  },
+  "env": {
+    "n_eps": 100,
+    "n_levers": 50
+  },
+  "policy": {
+    "args": {
+      "kernel_size": 2,
+      "n_channels": 32,
+      "n_blocks": 3,
+      "nonlin_type": "relu"
+    },
+    "type": "TimeConvDiscreteOutPolicy"
+  }
+}

@@ -21,7 +21,7 @@
 #! The skylake/skylake-himem nodes have 32 CPUs (cores) each.
 #SBATCH --ntasks=256
 #! How much wallclock time will be required?
-#SBATCH --time=7:00:00
+#SBATCH --time=12:00:00
 #! What types of email messages do you wish to receive?
 #SBATCH --mail-type=FAIL
 #! Uncomment this to prevent the job from being requeued (e.g. if
@@ -66,7 +66,7 @@ source activate ga
 application="python ga_dist/main.py"
 
 #! Run options for the application:
-options="--config atari.json --env_id $env_id --super_exp_id $super_exp_id --global_seed $global_seed"
+options="--env_id $env_id --super_exp_id $super_exp_id --global_seed $global_seed"
 
 #! Work directory (i.e. where the job will run):
 workdir="/home/pc517/ga-dist/distributed"  # The value of SLURM_SUBMIT_DIR sets workdir to the directory

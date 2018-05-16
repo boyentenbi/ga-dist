@@ -10,6 +10,7 @@
     "n_parents": 20,
     "n_elite_candidates":10,
     "n_evals": 30,
+    "n_redundant_evals": 5,
 
     "return_proc_mode": "centered_rank",
     "episode_cutoff_mode": "env_default",

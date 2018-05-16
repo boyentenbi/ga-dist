@@ -1,1 +1,1 @@
-from gym_meta_bandit.envs.metabanditenv import MetaBanditEnv
+from gym_meta_bandit.envs.metabandit import MetaBanditEnv

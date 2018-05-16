@@ -40,11 +40,6 @@ Config = namedtuple('Config', [
     "n_evals",
     "n_redundant_evals",
     'global_seed',
-
-    'l2coeff',
-    'calc_obstat_prob', 'snapshot_freq',
-    'return_proc_mode', 'episode_cutoff_mode', "adaptive_tstep_lim", 'tstep_lim_incr_ratio',
-    'tstep_maxing_thresh',
 ])
 
 Result = namedtuple('Result', [
@@ -201,8 +196,6 @@ class Node:
 
             worker_id = rs.randint(2**31)
 
-            if worker_id == 0:
-                print("What?")
             eps_done = 0
             cached_task_id = None
             candidates_done = 0
@@ -740,6 +733,7 @@ class MasterNode(Node):
         d=\
         {'EliteRetMax': None if not elite_rets else float(np.max(elite_rets)),
          'EliteRetMed': None if not elite_rets else float(np.median(elite_rets)),
+         'EliteRetMean': None if not elite_rets else float(np.mean(elite_rets)),
          'EliteRetMin': None if not elite_rets else float(np.min(elite_rets)),
 
          'EliteLenMax': None if not elite_lens else int(np.max(elite_lens)),
