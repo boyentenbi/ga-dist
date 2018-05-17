@@ -4,14 +4,30 @@ import seaborn as sns
 import numpy as np
 import os
 import matplotlib
-from matplotlib.ticker import FormatStrFormatter, ScalarFormatter
 super_exp_path = '/home/pc517/ga-dist/distributed/logs/2018:05:12-11:43:12'
 print("Number of results files found in {}:".format(super_exp_path))
 dfs = {}
 
-matplotlib.rcParams.update({'font.size': 7})
+matplotlib.rcParams.update({'font.size': 6})
 
-envs = ["AsteroidsNoFrameskip-v4", "KangarooNoFrameskip-v4"] # os.listdir(super_exp_path)
+test_mode = True
+
+n_tsteps = 250000000
+tick = 10 ** 7
+frames_per_step = 4
+n_cols = 3
+n_games = 13
+n_xticks = 5
+n_rows = int(np.ceil(n_games / n_cols))
+game_counter = 0
+graph_len = n_tsteps*frames_per_step / tick + 1
+fig, axs = plt.subplots(ncols=n_cols, nrows = n_rows, figsize=(7,9))
+
+if test_mode:
+    envs = ["AsteroidsNoFrameskip-v4",
+            "KangarooNoFrameskip-v4"] # os.listdir(super_exp_path)
+else:
+    envs = os.listdir(super_exp_path)
 
 for env_id in envs:
     env_exp_path = os.path.join(super_exp_path, env_id)
@@ -26,20 +42,11 @@ for env_id in envs:
         seed_count += 1
 
         dfs[env_id][seed] = results
-        break
+        if test_mode:
+            break
     print("    {}: {}".format(env_id, seed_count))
 
 
-n_tsteps = 250000000
-tick = 10 ** 7
-frames_per_step = 4
-n_cols = 3
-n_games = 13
-n_xticks = 5
-n_rows = int(np.ceil(n_games / n_cols))
-game_counter = 0
-graph_len = n_tsteps*frames_per_step / tick + 1
-fig, axs = plt.subplots(ncols=n_cols, nrows = n_rows, figsize=(7,9))
 
 game_counter = 0
 for env_id, env_results in dfs.items():
@@ -113,14 +120,14 @@ for i in range(n_games-n_cols,n_games):
     col = int(i%n_cols)
     row = int(np.floor(i/n_cols))
     ax=axs[row, col]
-    ax.set_xlabel("N. training frames", labelpad=5)
+    ax.set_xlabel("Number of game frames", labelpad=5)
     ax.set_xticks([n_tsteps * frames_per_step / n_xticks * i for i in range(n_xticks+1)])
     # t = ax.xaxis.get_offset_text()
     # t.set_size(5)
     # ax.set_xticklabels(
     #         [int(n_tsteps * frames_per_step / n_xticks  * i)\
     #          for i in range(n_xticks+1)])
-    ax.ticklabel_format(style="sci", useMathText=True)
+    ax.ticklabel_format(style="sci", useMathText=False)
     # ax.xaxis.set_major_formatter(ScalarFormatter())
     # ax.set_xlim(0,10**9)
 
