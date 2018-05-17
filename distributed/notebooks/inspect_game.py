@@ -5,12 +5,13 @@ import numpy as np
 import os
 import matplotlib
 super_exp_path = '/home/pc517/ga-dist/distributed/logs/2018:05:12-11:43:12'
+print("Loading results files. This may take a while...")
 print("Number of results files found in {}:".format(super_exp_path))
 dfs = {}
 
 matplotlib.rcParams.update({'font.size': 6})
 
-test_mode = True
+test_mode = False
 
 n_tsteps = 250000000
 tick = 10 ** 7
@@ -24,8 +25,7 @@ graph_len = n_tsteps*frames_per_step / tick + 1
 fig, axs = plt.subplots(ncols=n_cols, nrows = n_rows, figsize=(7,9))
 
 if test_mode:
-    envs = ["AsteroidsNoFrameskip-v4",
-            "KangarooNoFrameskip-v4"] # os.listdir(super_exp_path)
+    envs = ["AsteroidsNoFrameskip-v4"] # os.listdir(super_exp_path)
 else:
     envs = os.listdir(super_exp_path)
 
@@ -46,7 +46,7 @@ for env_id in envs:
             break
     print("    {}: {}".format(env_id, seed_count))
 
-
+print("Generating graph data")
 
 game_counter = 0
 for env_id, env_results in dfs.items():
@@ -93,8 +93,8 @@ for env_id, env_results in dfs.items():
                 ys.append(elite_mean)
 
         graphs.append(ys)
-    for g in graphs:
-        assert len(g) == graph_len
+    # for g in graphs:
+    #     assert len(g) == graph_len
     starts = []
     for g in graphs:
         starts.append(min([i for i in range(len(g)) if g[i] is not None]))
@@ -137,4 +137,4 @@ for i in range(n_games,n_cols*n_rows):
     col = int(i%n_cols)
     row = int(np.floor(i/n_cols))
     fig.delaxes(axs[row, col])
-plt.savefig('/home/pc517/ga-dist/distributed/notebooks/learning_curves.pdf')
+plt.savefig('/home/pc517/ga-dist/distributed/notebooks/learning_curves.pdf', bbox_inches='tight')
