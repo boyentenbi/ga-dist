@@ -137,4 +137,4 @@ for i in range(n_games,n_cols*n_rows):
     col = int(i%n_cols)
     row = int(np.floor(i/n_cols))
     fig.delaxes(axs[row, col])
-plt.savefig('/home/pc517/ga-dist/distributed/notebooks/learning_curves.pdf')
+plt.savefig('/home/pc517/ga-dist/distributed/notebooks/learning_curves.pdf', bbox_inches='tight')
