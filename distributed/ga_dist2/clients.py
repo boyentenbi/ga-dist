@@ -229,6 +229,7 @@ class WorkerClient:
                         break
                 except redis.WatchError:
                     # Just try again
+                    logger.debug('[worker] failed to get a task!')
                     continue
 
         return self.cached_task_id, self.cached_task_data

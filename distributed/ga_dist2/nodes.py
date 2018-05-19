@@ -19,7 +19,7 @@ gym.undo_logger_setup()
 import policies, tf_util
 from collections import namedtuple, OrderedDict
 import tf_util as U
-
+from inspect_functions import make_gif
 import subprocess
 
 logger = logging.getLogger(__name__)
@@ -129,6 +129,8 @@ class Node:
         # Sampling seeds and then using the first sample from resulting normal
         # wouldn't necessarily give normally distributed samples!
 
+    def start_workers(self, n_gifs, gif_path):
+
         # Start worker processes
         self.wps = []
 
@@ -139,28 +141,21 @@ class Node:
         # self.wps = []
         self.q = multiprocessing.Queue()
         for process_num in range(self.n_workers):
-            cluster_worker_num = node_id * self.n_workers + process_num
+            cluster_worker_num = self.node_id * self.n_workers + process_num
             # Allocate candidates to this worker
             my_candidates = [c for i, c in enumerate(evals_w_redundancy) if
                              i % (self.n_nodes * self.n_workers) == cluster_worker_num]
             # try:
-            wp = Process(target=self.worker_process, args=(my_candidates,self.q))
+            wp = Process(target=self.worker_process, args=(my_candidates, self.q, n_gifs, gif_path))
             self.wps.append(wp)
             wp.start()
-
-            #     raise to_handle
-            # except Exception as e:
-            #     raise e
-
-
-
 
     def get_n_workers(self):
         raise NotImplementedError
     # def get_master_redis_cfg(self, password):
     #     raise NotImplementedError
 
-    def worker_process(self, my_candidates, exception_queue):
+    def worker_process(self, my_candidates, exception_queue, n_gifs, gif_path=None):
         try:
             wc = WorkerClient(relay_redis_cfg=self.relay_redis_cfg)
 
@@ -195,6 +190,8 @@ class Node:
             rs = np.random.RandomState()
 
             worker_id = rs.randint(2**31)
+
+            # rs = np.random.RandomState(worker_id)
 
             eps_done = 0
             cached_task_id = None
@@ -259,11 +256,18 @@ class Node:
                             v += self.config.noise_stdev * self.noise.get(j, policy.num_params)
 
                     policy.set_trainable_flat(v)
-                    rewards, n_steps = policy.rollout(env, timestep_limit=self.config.init_tstep_limit)
 
-                    # policy.set_trainable_flat(task_data.params - v)
-                    # rews_neg, len_neg = rollout_and_update_ob_stat(
-                    #     policy, env, task_data.timestep_limit, rs, task_ob_stat, config.calc_obstat_prob)
+                    if eps_done +cycle_eps_done< n_gifs:
+                        rewards, n_steps, obs = policy.rollout(env, timestep_limit=self.config.init_tstep_limit,
+                                                               save_obs=True)
+
+                        frames = np.asarray([ob._out[:, :, -1] for ob in obs])
+                        make_gif(frames, os.path.join(gif_path, 'ep-{}-{}.gif'.format(eps_done+cycle_eps_done, np.sum(rewards))),
+                                 duration=n_steps / 100, true_image=False, salience=False, salIMGS=None)
+
+                    else:
+                        rewards, n_steps, = policy.rollout(env, timestep_limit=self.config.init_tstep_limit,
+                                                               save_obs=False)
                     ret = float(np.sum(rewards))
                     finish_time = time.time()
                     n_seconds = float(finish_time - cycle_tstart)
@@ -285,7 +289,6 @@ class Node:
         except Exception as e:
             exception_queue.put(e)
             logger.error(e, exc_info=True)
-
 
 # The master node also has worker processes
 class MasterNode(Node):
@@ -318,13 +321,13 @@ class MasterNode(Node):
         # Logging files! Very important!
         #year, month, day, hour, min, sec = time.localtime()[:6]
         #log_folder = "deepmind-{}.{}.{}:{}:{}.{}-{}-{}".format(self.exp['env_id'], self.n_workers, hour, min, sec, day, month, year)
-        self.csv_log_path = os.path.join(self.log_dir, "results.csv")
+        csv_log_path = os.path.join(self.log_dir, "results.csv")
         # tab_log_path = os.path.join(self.log_dir)
         json_log_path = os.path.join(self.log_dir, "short_log.json")
         # logger.info('Tabular logging to {}/log.txt'.format(tab_log_path))
-        logger.info('csv logging to {}'.format(self.csv_log_path))
+        logger.info('csv logging to {}'.format(csv_log_path))
         # tlogger.start(tab_log_path)
-        with open(self.csv_log_path, 'w') as f:
+        with open(csv_log_path, 'w') as f:
             writer = csv.DictWriter(f, fieldnames=self.log_quantities)
             writer.writeheader()
         with open(json_log_path, 'w') as f:
@@ -361,7 +364,7 @@ class MasterNode(Node):
             task_ids_set.add(task_id)
             # Collect the generation (a lot of work)
             cnl_strings = ["-".join([str(idx) for idx in cnl]) for cnl in candidate_noise_lists]
-            results = self.collect_gen(task_id, gen_num, cnl_strings, exp_tstart)
+            results = self.collect_gen(task_id, gen_num, cnl_strings, exp_tstart, csv_log_path, 0)
 
             # results = [r for r in results if r['worker_gen_id'] in task_ids_set]
             # All other nodes are now wasting compute for master from here!
@@ -381,20 +384,7 @@ class MasterNode(Node):
 
             # append previous best to new list: 'elitism'
 
-
-
-
             if gen_num >= 1:
-
-                # by_worker = {i: [r for r in eval_results if r["worker_id"] == i] for i in
-                #              range(self.n_workers)}
-                #
-                # n_evals_to_do = (self.config.n_evals * self.config.n_elite_candidates)
-                #
-                # cluster_n_workers = (self.n_nodes * self.n_workers)
-                # evals_per_worker = np.floor(n_evals_to_do / cluster_n_workers)
-                # for worker_id, ress in by_worker.items():
-                #     assert evals_per_worker <= len(ress) and len(ress) <= evals_per_worker + 1
 
                 # assert we have enough evals for each candidate
                 eval_results_agg = dict(zip(cnl_strings, [{"count":0,
@@ -508,38 +498,159 @@ class MasterNode(Node):
         else:
             logger.info("Running on login node(s). Experiment finished. ")
 
-    # def collect_elite_gen(self, eval_gen_id, gen_start_queue_size, elite_noise_lists, n_elite_evals):
-    #
-    #     elite_genomes = ["-".join([str(x)for x in enl]) for enl in elite_noise_lists]
-    #
-    #     elite_rets = OrderedDict(zip(elite_genomes, [[] for eg in elite_genomes]))
-    #     elite_lens = OrderedDict(zip(elite_genomes, [[] for eg in elite_genomes]))
-    #
-    #     # Prep for new gen results
-    #     n_gen_eps, n_gen_steps, \
-    #     n_bad_eps, n_bad_steps, bad_time = 0, 0, 0, 0, 0
-    #
-    #     while min([len(rets) for rets in elite_rets.values()])<n_elite_evals:
-    #         # Pop a result, accumulate if current gen, throw if past gen
-    #         worker_gen_id, r = self.master_client.pop_result()
-    #
-    #         if worker_gen_id == eval_gen_id:
-    #             n_gen_eps += 1
-    #             n_gen_steps += r.len
-    #             eg = "-".join([str(x)for x in r.noise_list])
-    #             elite_lens[eg].append(r.len)
-    #             elite_rets[eg].append(r.ret)
-    #         else:
-    #             n_bad_eps += 1
-    #             n_bad_steps += r.len
-    #             bad_time += r.time
-    #             assert n_bad_eps < gen_start_queue_size + 10000
-    #         logger.debug("n_gen_eps = {}, n_bad_eps = {}".format(n_gen_eps, n_bad_eps))
-    #
-    #     return n_gen_eps, n_gen_steps, n_bad_eps, n_bad_steps, bad_time,\
-    #            elite_genomes, elite_rets, elite_lens
+    def resim_muts(self, parent_nls):
 
-    def collect_gen(self, master_task_id, master_gen_num, cnl_strings, exp_tstart):
+        csv_log_path = os.path.join(self.log_dir, "resim_results.csv")
+        logger.info('csv logging to {}'.format(csv_log_path))
+        json_log_path = os.path.join(self.log_dir, "resim_short_log.json")
+        with open(csv_log_path, 'w') as f:
+            writer = csv.DictWriter(f, fieldnames=self.log_quantities)
+            writer.writeheader()
+        with open(json_log_path, 'w') as f:
+            json.dump([], f)
+        # Prepare for experiment
+        self.master_client.declare_experiment(self.exp)
+        tstep_lim = self.config.init_tstep_limit
+        sess = make_session(single_threaded=True) # don't comment me out!
+        tf_util.initialize()
+
+        gen_tstart = time.time()
+        task_id = self.master_client.declare_task(
+                Task(parent_noise_lists=parent_nls,
+                     timestep_limit=self.config.init_tstep_limit,
+                     gen_num=0))
+
+        # Collect the generation (a lot of work)
+        pnl_strings = ["-".join([str(idx) for idx in pnl]) for pnl in parent_nls]
+        results = self.collect_gen(task_id, 0, pnl_strings, gen_tstart, csv_log_path, 0)
+
+        gen_tend = time.time()
+
+        # All other nodes are now wasting compute for master from here!
+        for r in results:
+            assert r["is_valid"] and not r["is_eval"]
+
+        mut_results = results
+        # Write the short logs
+        self.log_json(mut_results,
+                      [],
+                      {},
+                      None,
+                      gen_tend,
+                      gen_tstart,
+                      0,
+                      gen_tstart,
+                      sum([r["n_steps"] for r in results]),
+                      len(results),
+                      json_log_path)
+
+        logger.info("Finished {} eps in {} timesteps.".format(len(results), sum([r["n_steps"] for r in results])))
+
+        if "SLURM_JOB_ID" in os.environ:
+            logger.info("Running on cluster. Declaring experiment end. SLURM_JOB_ID = {}".format(os.environ["SLURM_JOB_ID"]))
+            subprocess.call("scancel {}".format(os.environ["SLURM_JOB_ID"]), shell=True)
+        else:
+            logger.info("Running on login node(s). Experiment finished. ")
+
+
+    def eval_elites(self, elite_nls):
+
+        csv_log_path = os.path.join(self.log_dir, "elite_results.csv")
+        logger.info('csv logging to {}'.format(csv_log_path))
+        json_log_path = os.path.join(self.log_dir, "elite_short_log.json")
+        with open(csv_log_path, 'w') as f:
+            writer = csv.DictWriter(f, fieldnames=self.log_quantities)
+            writer.writeheader()
+        with open(json_log_path, 'w') as f:
+            json.dump([], f)
+        # Prepare for experiment
+        self.master_client.declare_experiment(self.exp)
+        tstep_lim = self.config.init_tstep_limit
+        sess = make_session(single_threaded=True) # don't comment me out!
+        tf_util.initialize()
+
+        gen_tstart = time.time()
+        task_id = self.master_client.declare_task(
+                Task(parent_noise_lists=elite_nls,
+                     timestep_limit=self.config.init_tstep_limit,
+                     gen_num=0))
+
+        # Collect the generation (a lot of work)
+        enl_strings = ["-".join([str(idx) for idx in enl]) for enl in elite_nls]
+        results = self.collect_gen(task_id, 0, enl_strings, gen_tstart, csv_log_path, 0)
+
+        gen_tend = time.time()
+
+        # All other nodes are now wasting compute for master from here!
+        for r in results:
+            assert r["is_valid"] and r["is_eval"]
+
+        eval_results = [r for r in results if r['is_valid'] and r['is_eval']]
+
+        # assert we have enough evals for each candidate
+        eval_results_agg = dict(zip(enl_strings, [{"count":0,
+                                                  "rets":[],
+                                                  "lens":[],
+                                                   "workers":[]} for _ in range(self.config.n_elite_candidates)]))
+
+        for er in eval_results:
+            enl_string = "-".join([str(idx) for idx in er["noise_list"]])
+
+            eval_results_agg[enl_string]["count"] += 1
+            eval_results_agg[enl_string]["rets"].append(er["ret"])
+            eval_results_agg[enl_string]["lens"].append(er["n_steps"])
+            eval_results_agg[enl_string]["workers"].append(er["worker_id"])
+
+
+        # Write the short logs
+        self.log_json([],
+                 eval_results,
+                 eval_results_agg,
+                 None,
+                 gen_tend, gen_tstart, 0, gen_tstart, sum([r["n_steps"] for r in results]), len(results),
+                 json_log_path)
+
+        logger.info("Finished {} eps in {} timesteps.".format(len(results), sum([r["n_steps"] for r in results])))
+
+        # logger.info("Running elite eval gen")
+        # # declare the elite eval gen
+        # eval_gen_id =self.master_client.declare_gen(
+        #     Gen(done=True,
+        #         noise_lists=elite_noise_lists,
+        #         timestep_limit=self.config.init_tstep_limit))
+        # n_gen_eps, n_gen_steps, n_bad_eps, n_bad_steps, bad_time, \
+        # elite_genomes, elite_rets, elite_lens = self.collect_elite_gen(eval_gen_id, gen_start_queue_size, elite_noise_lists, self.config.n_elite_evals)
+        # logger.info("Finished elite eval gen with {} episodes.".format(n_gen_eps))
+        #
+        # # Log the cross-generation elite results
+        # elite_log_path = os.path.join(self.log_dir, "elite_log.csv")
+        # elite_eval_fieldnames = [
+        #         'EpRetMax', 'EpRetUQ', 'EpRetMed', 'EpRetLQ', 'EpRetMin',
+        #         'EpLenMax', 'EpLenUQ', 'EpLenMed', 'EpLenLQ', 'EpLenMin',]
+        # with open(elite_log_path, 'w') as f:
+        #     writer = csv.DictWriter(f, fieldnames=elite_eval_fieldnames)
+        #     writer.writeheader()
+        # for eg in elite_genomes:
+        #     elite_log_dict = {"EpRetMax": np.nan if not elite_rets[eg] else np.max(elite_rets[eg]),
+        #     "EpRetUQ": np.nan if not elite_rets[eg] else np.percentile(elite_rets[eg], 75),
+        #     "EpRetMed": np.nan if not elite_rets[eg] else np.median(elite_rets[eg]),
+        #     "EpRetLQ": np.nan if not elite_rets[eg] else np.percentile(elite_rets[eg], 25),
+        #     "EpRetMin": np.nan if not elite_rets[eg] else np.min(elite_rets[eg]),
+        #
+        #     "EpLenMax": np.nan if not elite_lens[eg] else np.max(elite_lens[eg]),
+        #     "EpLenUQ": np.nan if not elite_lens[eg] else np.percentile(elite_lens[eg], 75),
+        #     "EpLenMed": np.nan if not elite_lens[eg] else np.median(elite_lens[eg]),
+        #     "EpLenLQ": np.nan if not elite_lens[eg] else np.percentile(elite_lens[eg], 25),
+        #     "EpLenMin": np.nan if not elite_lens[eg] else np.min(elite_lens[eg]),}
+        #     self.csv_log_append(elite_log_dict, elite_log_path, elite_eval_fieldnames)
+
+        if "SLURM_JOB_ID" in os.environ:
+            logger.info("Running on cluster. Declaring experiment end. SLURM_JOB_ID = {}".format(os.environ["SLURM_JOB_ID"]))
+            subprocess.call("scancel {}".format(os.environ["SLURM_JOB_ID"]), shell=True)
+        else:
+            logger.info("Running on login node(s). Experiment finished. ")
+
+    def collect_gen(self, master_task_id, master_gen_num, cnl_strings, exp_tstart, csv_log_path, worker_min=0):
         # Prep for new gen results
         n_gen_eps, n_mut_eps = 0, 0
         n_gen_steps, n_mut_steps, n_eval_steps = 0, 0, 0
@@ -547,10 +658,11 @@ class MasterNode(Node):
         # n_bad_eps, n_bad_steps, bad_time = 0, 0, 0, 0, 0, 0, 0
         # mut_rets, mut_lens, mut_times, mut_noise_lists = [], [], [], []
         # eval_rets, eval_lens, eval_times, eval_noise_lists = [], [], [], []
-        # worker_eps = {}
+        worker_mut_counts = {}
 
         results = []
         eval_counts = {c: 0 for c in cnl_strings}
+
         worker_eval_counts = {}
         # assert task_id not in gen_nums.keys()
         # gen_nums[task_id] = gen_num
@@ -560,7 +672,9 @@ class MasterNode(Node):
 
         while n_gen_eps < self.config.episodes_per_batch or \
                 n_gen_steps < self.config.timesteps_per_batch or\
-                (master_gen_num >= 1 and min(eval_counts.values()) < self.config.n_evals):
+                (master_gen_num >= 1 and min(eval_counts.values()) < self.config.n_evals) or\
+                (worker_min and min(worker_mut_counts.values() < worker_min)) or \
+                (worker_min and len(worker_mut_counts) < self.n_workers):
 
             # Continue if results not full
             # Do I want to count evals in number of eps done?
@@ -594,7 +708,7 @@ class MasterNode(Node):
 
             results.append(result_dict)
 
-            self.log_csv([results[-1]], exp_tstart)
+            self.log_csv([results[-1]], exp_tstart, csv_log_path)
             if is_valid:
                 if not r.gen_num == master_gen_num:
                     raise Exception("worker gen num and master gen num did not match, but result was valid?")
@@ -612,6 +726,7 @@ class MasterNode(Node):
                 else:
                     n_mut_eps += 1
                     n_mut_steps += r.n_steps
+                    worker_mut_counts[r.worker_id] = worker_mut_counts.get(r.worker_id, 0) + 1
 
         # if master_gen_num >=1:
         #     for c, count in eval_counts.items():
@@ -672,7 +787,7 @@ class MasterNode(Node):
                 tlogger.record_tabular(quantity, value)
         tlogger.dump_tabular()
 
-    def log_csv(self, results,  exp_tstart):
+    def log_csv(self, results,  exp_tstart, path):
 
         saveable_results = []
         for r in results:
@@ -689,7 +804,7 @@ class MasterNode(Node):
                         'is_valid': r['is_valid']}
             saveable_results.append(row_dict)
 
-        with open(self.csv_log_path, 'a') as f:
+        with open(path, 'a') as f:
             writer = csv.DictWriter(f,
                                     fieldnames=[
                                         'worker_id',

@@ -86,12 +86,10 @@ if __name__ == "__main__":
                             relay_socket='/tmp/es_redis_relay.sock',
                             master_pw="deepbrickwindowattack",
                             log_dir=log_dir)
-
+                    node.start_workers(n_gifs=False)
                     node.begin_exp()
 
-
                 else:
-                    # while True:
                     # start the workers subscriptions
                     node = WorkerNode(
                             len(node_list),
@@ -103,7 +101,7 @@ if __name__ == "__main__":
                             relay_socket='/tmp/es_redis_relay.sock',
                             master_pw="deepbrickwindowattack",
                             log_dir=log_dir)
-
+                    node.start_workers(n_gifs=False)
 
                 logger.info("Node {} done!".format(node_id))
 

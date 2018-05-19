@@ -144,7 +144,7 @@ class Node:
         # self.wps = []
         self.q = multiprocessing.Queue()
         for process_num in range(self.n_workers):
-            cluster_worker_num = node_id * self.n_workers + process_num
+            cluster_worker_num = self.node_id * self.n_workers + process_num
             # Allocate candidates to this worker
             my_candidates = [c for i, c in enumerate(evals_w_redundancy) if
                              i % (self.n_nodes * self.n_workers) == cluster_worker_num]
@@ -152,13 +152,6 @@ class Node:
             wp = Process(target=self.worker_process, args=(my_candidates,self.q))
             self.wps.append(wp)
             wp.start()
-
-            #     raise to_handle
-            # except Exception as e:
-            #     raise e
-
-
-
 
     def get_n_workers(self):
         raise NotImplementedError
@@ -387,9 +380,6 @@ class MasterNode(Node):
             #     logger.info('Increased timestep limit from {} to {}'.format(old_tslimit, tslimit))
 
             # append previous best to new list: 'elitism'
-
-
-
 
             if gen_num >= 1:
 

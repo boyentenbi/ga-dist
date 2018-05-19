@@ -1,0 +1,46 @@
+{
+  "config": {
+    "noise_stdev": 0.002,
+    "n_noise": 250000000,
+    "n_tsteps":250000000,
+    "episodes_per_batch": 200,
+    "timesteps_per_batch": 10000,
+    "init_tstep_limit":5000,
+    "min_gen_time":0.2,
+    "n_parents": 20,
+    "n_elite_candidates":1,
+    "n_evals": 200,
+    "n_redundant_evals": 0
+  },
+  "exp_prefix": "humanoid",
+  "optimizer": {
+    "args": {
+      "stepsize": 0.01
+    },
+    "type": "adam"
+  },
+  "policy": {
+    "args": {
+      "kernel_sizes": [
+        8,
+        4,
+        3
+      ],
+      "n_channels":[
+        32,
+        64,
+        64
+      ],
+      "strides":[
+        4,
+        2,
+        1
+      ],
+      "hidden_dims":[
+        512
+      ],
+      "nonlin_type": "relu"
+    },
+    "type": "AtariPolicy"
+  }
+}
