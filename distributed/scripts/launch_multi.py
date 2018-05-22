@@ -61,22 +61,22 @@ ATARI_ENV_IDS = [
     "WizardOfWorNoFrameskip-v4",
     "YarsRevengeNoFrameskip-v4",
     "ZaxxonNoFrameskip-v4",]
-
-super_exp_id = time.strftime("%Y:%m:%d-%H:%M:%S")
+super_exp_id = "2018:05:16-00:41:31"
+# super_exp_id = time.strftime("%Y:%m:%d-%H:%M:%S")
 games = [
     # "FrostbiteNoFrameskip-v4",
     #      "SkiingNoFrameskip-v4",
          # "VentureNoFrameskip-v4",
-         # "KangarooNoFrameskip-v4",
+         "KangarooNoFrameskip-v4",
          # "GravitarNoFrameskip-v4",
-         "AsteroidsNoFrameskip-v4",
-         "ZaxxonNoFrameskip-v4",
-         "AmidarNoFrameskip-v4",
-         "AssaultNoFrameskip-v4",
-         "AsterixNoFrameskip-v4",
-         "SeaquestNoFrameskip-v4",
-         "EnduroNoFrameskip-v4",
-         "AtlantisNoFrameskip-v4"
+         # "AsteroidsNoFrameskip-v4",
+         # "ZaxxonNoFrameskip-v4",
+         # "AmidarNoFrameskip-v4",
+         # "AssaultNoFrameskip-v4",
+         # "AsterixNoFrameskip-v4",
+         # "SeaquestNoFrameskip-v4",
+         # "EnduroNoFrameskip-v4",
+         # "AtlantisNoFrameskip-v4"
          ]
 
 from gym import envs
@@ -100,13 +100,13 @@ x=input(">>")
 if x == str(rnd):
 
     os.environ["super_exp_id"]=super_exp_id
-    os.mkdir(os.path.join("logs", super_exp_id))
     for env_id in games:
         if not env_id =="-":
-            os.mkdir(os.path.join("logs", super_exp_id, env_id))
+            # os.mkdir(os.path.join("logs", super_exp_id, env_id))
 
             for seed in seeds:
-                os.mkdir(os.path.join("logs", super_exp_id, env_id, str(seed)))
+
+                os.makedirs(os.path.join("logs", super_exp_id, env_id, str(seed)))
                 new_shell_env = os.environ.copy()
                 new_shell_env["global_seed"]=str(seed)
                 new_shell_env["env_id"]=env_id

@@ -454,9 +454,16 @@ class TimeConvDiscreteOutPolicy(Policy):
             # Policy network
             #logger.info("Observation space has shape {}".format(ob_space.shape))
             o = tf.placeholder(tf.float32, [None, self.ob_space.shape[0]])
-            init_ops, push_ops, ps  = self._make_net(o)
+            self.clear_ops, self.fill_ops, self.push_ops, ps  = self._make_net(o)
 
-            self._act = U.function(inputs=[o], outputs=ps, updates=push_ops)
+            self._act = U.function(inputs=[o], outputs=ps, updates=self.push_ops)
+
+        U.get_session().run(self.clear_ops)
+        U.get_session().run(self.fill_ops)
+
+        queue_sizes = U.get_session().run([q.size() for q in self.qs])
+        for i, qs in enumerate(queue_sizes):
+            assert qs == 2**(i%self.layers_per_block)
 
         return scope
 
@@ -464,7 +471,8 @@ class TimeConvDiscreteOutPolicy(Policy):
 
         h = x
         self.qs = []
-        init_ops = []
+        fill_ops = []
+        clear_ops = []
         push_ops = []
         state_size = self.ac_space.n+2
         for b in range(self.n_blocks):
@@ -472,40 +480,40 @@ class TimeConvDiscreteOutPolicy(Policy):
                 rate = 2 ** i
                 name = 'b{}-l{}'.format(b, i)
 
-
-
-                q = tf.FIFOQueue(rate,
+                q = tf.FIFOQueue(capacity=rate,
                                  dtypes=tf.float32,
                                  shapes=(1, state_size,))
                 self.qs.append(q)
+
                 clear = q.dequeue_many(q.size())
                 fill = q.enqueue_many(tf.zeros((rate, 1, state_size)))
-                state_ = q.dequeue()
+
                 push = q.enqueue([h])
-                init_ops.append([clear,fill])
+                state_ = q.dequeue()
+
+                clear_ops.append(clear)
+                fill_ops.append(fill)
                 push_ops.append(push)
 
-                r = tf.layers.dense(tf.concat([h, state_], axis = 1), self.n_channels, activation=tf.nn.relu)
+                r = tf.layers.dense(tf.concat([state_, h], axis = 1), self.n_channels, activation=tf.nn.relu)
                 h = tf.concat([r,h], axis = 1)
                 state_size += self.n_channels
 
         ps = tf.layers.dense(h, self.ac_space.n,  activation = tf.nn.softmax)
 
 
-        # self.inputs = inputs
-        self.init_ops = init_ops
-        self.push_ops = push_ops
 
         # # Initialize queues.
         # U.get_session().run(self.init_ops)
 
-        return init_ops, push_ops, ps
+        return  clear_ops, fill_ops, push_ops, ps
 
     def act(self, ob, random_stream=None):
         if random_stream:
             return random_stream.choice(range(self.ac_space.n), self._act(ob)[0])
         else:
-            return np.random.choice(range(self.ac_space.n), p=self._act(ob)[0])
+            p = self._act(ob)[0]
+            return np.random.choice(self.ac_space.n, p=p)
 
     @property
     def needs_ob_stat(self):
@@ -552,7 +560,10 @@ class TimeConvDiscreteOutPolicy(Policy):
 
     def rollout(self, env, *, render=False, timestep_limit=None, save_obs=False, random_stream=None):
 
-        U.get_session().run(self.init_ops)
+        U.get_session().run(self.clear_ops)
+        U.get_session().run(self.fill_ops)
+
+
         return super().rollout(env=env, render=render,
                                timestep_limit=timestep_limit,
                                save_obs=save_obs,

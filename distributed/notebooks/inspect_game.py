@@ -4,7 +4,7 @@ import seaborn as sns
 import numpy as np
 import os
 import matplotlib
-super_exp_path = '/home/pc517/ga-dist/distributed/logs/2018:05:12-11:43:12'
+super_exp_path = '/home/pc517/ga-dist/distributed/logs/2018:05:16-00:41:31'
 print("Loading results files. This may take a while...")
 print("Number of results files found in {}:".format(super_exp_path))
 dfs = {}

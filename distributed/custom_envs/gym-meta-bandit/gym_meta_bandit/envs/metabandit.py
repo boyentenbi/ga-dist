@@ -20,7 +20,11 @@ class MetaBanditEnv(gym.Env):
         self.n_levers = n_levers
         self.n_eps = n_eps
 
-        self.ps = np.random.rand(self.n_levers)
+        self.mode = "not_triv"
+        if self.mode == "triv":
+            self.ps = np.asarray([.75,0.25])#np.random.rand(self.n_levers)
+        else:
+            self.ps = np.random.rand(self.n_levers)
 
         # prev_action one-hot, prev_reward, eps_remaining
         self.state = np.zeros([self.n_levers + 2])
@@ -64,10 +68,11 @@ class MetaBanditEnv(gym.Env):
 
         # self.take_action(action)
         reward = 1. if np.random.rand() <  self.ps[action] else 0.
-        ob = self.get_state()
-        self.current_ep += 1
         self.prev_action_idx = action
+        self.current_ep += 1
         self.prev_reward = reward
+        ob = self.get_state()
+
         done = self.current_ep == self.n_eps
         info = {}
         return ob, reward, done, info
@@ -83,7 +88,8 @@ class MetaBanditEnv(gym.Env):
         -------
         observation (object): the initial observation of the space.
         """
-        self.ps = np.random.rand(self.n_levers)
+        if not self.mode=="triv":
+            self.ps = np.random.rand(self.n_levers)
 
         self.current_ep = 0
 

@@ -4,13 +4,13 @@
     "n_noise": 250000000,
     "n_tsteps":250000000,
     "episodes_per_batch": 200,
-    "timesteps_per_batch": 10000,
+    "timesteps_per_batch": 1000,
     "init_tstep_limit":5000,
     "min_gen_time":0.2,
     "n_parents": 20,
     "n_elite_candidates":1,
     "n_evals": 200,
-    "n_redundant_evals": 0
+    "n_redundant_evals": 100
   },
   "exp_prefix": "humanoid",
   "optimizer": {

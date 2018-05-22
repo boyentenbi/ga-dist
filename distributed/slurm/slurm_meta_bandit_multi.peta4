@@ -16,12 +16,12 @@
 #! Which project should be charged:
 #SBATCH -A JMH233-SL3-CPU 
 #! How many whole nodes should be allocated?
-#SBATCH --nodes=8
+#SBATCH --nodes=2
 #! How many (MPI) tasks will there be in total? (<= nodes*32)
 #! The skylake/skylake-himem nodes have 32 CPUs (cores) each.
-#SBATCH --ntasks=256
+#SBATCH --ntasks=64
 #! How much wallclock time will be required?
-#SBATCH --time=12:00:00
+#SBATCH --time=00:20:00
 #! What types of email messages do you wish to receive?
 #SBATCH --mail-type=FAIL
 #! Uncomment this to prevent the job from being requeued (e.g. if
@@ -63,10 +63,10 @@ source activate ga
 
 
 #! Full path to application executable: 
-application="python ga_dist/main.py"
+application="python ga_dist2/main.py"
 
 #! Run options for the application:
-options="--env_id $env_id --super_exp_id $super_exp_id --global_seed $global_seed"
+options="--config $config --env_id $env_id --super_exp_id $super_exp_id --global_seed $global_seed"
 
 #! Work directory (i.e. where the job will run):
 workdir="/home/pc517/ga-dist/distributed"  # The value of SLURM_SUBMIT_DIR sets workdir to the directory
@@ -137,7 +137,7 @@ echo -e "\nExecuting command:\n==================\n$CMD\n"
 # we want N nodes
 # there are n tasks
 
-log_dir="logs/$super_exp_id/$env_id/$global_seed"
+log_dir="logs/$super_exp_id/$env_id/$n_eps-$n_levers/$global_seed"
 for ((c=0; c<=($numnodes-1); c++));
 do
     err_file="$log_dir/err"

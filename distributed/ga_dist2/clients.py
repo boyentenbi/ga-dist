@@ -104,7 +104,7 @@ class MasterClient:
                 TASK_DATA_KEY:gd})
         p.publish(TASK_CHANNEL, to_publish) # TODO serialized serialized?
         p.execute()
-        logger.debug('[master] declared task {} for gen {}'.format(task_id, task_data.gen_num))
+        # logger.debug('[master] declared task {} for gen {}'.format(task_id, task_data.gen_num))
         return task_id
 
     # Get a result from the relay redis
@@ -195,6 +195,7 @@ class WorkerClient:
     """
 
     def __init__(self, relay_redis_cfg):
+        # logger.info("[worker] Trying to connect to relay... bad if doesn't say 'Connected to relay'")
         self.local_redis = retry_connect(relay_redis_cfg)
         logger.info('[worker] Connected to relay: {}'.format(self.local_redis))
         self.cached_task_id, self.cached_task_data = None, None
@@ -229,7 +230,7 @@ class WorkerClient:
                         break
                 except redis.WatchError:
                     # Just try again
-                    logger.debug('[worker] failed to get a task!')
+                    # logger.debug('[worker] failed to get a task!')
                     continue
 
         return self.cached_task_id, self.cached_task_data

@@ -106,6 +106,7 @@ class Node:
         self.master_redis_cfg = {'host': master_host, 'db': 0, 'password': master_pw}
         self.exp = exp
         self.log_dir = log_dir
+        self.exception_queue = multiprocessing.Queue()
 
         # Relay client
         try:
@@ -131,6 +132,8 @@ class Node:
 
     def start_workers(self, n_gifs, gif_path):
 
+        logger.info("Running start_workers in node {}".format(self.node_id))
+        logger.info("Should start {} workers".format(self.n_workers))
         # Start worker processes
         self.wps = []
 
@@ -139,23 +142,28 @@ class Node:
 
         # Start worker processes
         # self.wps = []
-        self.q = multiprocessing.Queue()
         for process_num in range(self.n_workers):
             cluster_worker_num = self.node_id * self.n_workers + process_num
+            logger.info("Trying to start worker {}".format(cluster_worker_num))
             # Allocate candidates to this worker
             my_candidates = [c for i, c in enumerate(evals_w_redundancy) if
                              i % (self.n_nodes * self.n_workers) == cluster_worker_num]
             # try:
-            wp = Process(target=self.worker_process, args=(my_candidates, self.q, n_gifs, gif_path))
+            wp = Process(target=self.worker_process,
+                         args=(my_candidates,
+                               self.exception_queue,
+                               True if cluster_worker_num <n_gifs else False,
+                               gif_path))
             self.wps.append(wp)
             wp.start()
+            logger.info("Started worker {}".format(cluster_worker_num))
 
     def get_n_workers(self):
         raise NotImplementedError
     # def get_master_redis_cfg(self, password):
     #     raise NotImplementedError
 
-    def worker_process(self, my_candidates, exception_queue, n_gifs, gif_path=None):
+    def worker_process(self, my_candidates, exception_queue, do_gif, gif_path=None):
         try:
             wc = WorkerClient(relay_redis_cfg=self.relay_redis_cfg)
 
@@ -213,6 +221,9 @@ class Node:
                     #     assert candidates_done == len(my_candidates)
                     candidates_done = 0
                     cached_task_id = task_id
+                    # assert task_data != task_data
+                    cached_task_data = task_data
+                    logger.info("Worker {} got new task id {}".format(worker_id, task_id))
 
                 # Prep for rollouts
                 #noise_sublists, returns, lengths = [], [], []
@@ -257,21 +268,23 @@ class Node:
 
                     policy.set_trainable_flat(v)
 
-                    if eps_done +cycle_eps_done< n_gifs:
+                    if do_gif and eps_done + cycle_eps_done == 0 :
                         rewards, n_steps, obs = policy.rollout(env, timestep_limit=self.config.init_tstep_limit,
                                                                save_obs=True)
 
                         frames = np.asarray([ob._out[:, :, -1] for ob in obs])
-                        make_gif(frames, os.path.join(gif_path, 'ep-{}-{}.gif'.format(eps_done+cycle_eps_done, np.sum(rewards))),
-                                 duration=n_steps / 100, true_image=False, salience=False, salIMGS=None)
+                        make_gif(frames, os.path.join(gif_path, 'ep-{}-{}.gif'.format(eps_done + cycle_eps_done, np.sum(rewards))),
+                               duration=n_steps / 100, true_image=False, salience=False, salIMGS=None)
 
                     else:
-                        rewards, n_steps, = policy.rollout(env, timestep_limit=self.config.init_tstep_limit,
-                                                               save_obs=False)
+                        rewards, n_steps, = policy.rollout(
+                                env,
+                                timestep_limit=self.config.init_tstep_limit,
+                                save_obs=False)
                     ret = float(np.sum(rewards))
                     finish_time = time.time()
                     n_seconds = float(finish_time - cycle_tstart)
-                    logger.info('Eval result: task_id={} return={:.3f} length={}'.format(
+                    logger.debug('Pushed result: task_id={} return={:.3f} length={}'.format(
                         task_id, ret, n_steps))
                     wc.push_result(task_id,
                                    Result(worker_id=worker_id,
@@ -314,6 +327,7 @@ class MasterNode(Node):
             'master_task_id',
             'is_valid']
 
+        self.start_workers(n_gifs=0, gif_path=log_dir)
     def begin_exp(self):
 
         import tabular_logger as tlogger
@@ -338,6 +352,7 @@ class MasterNode(Node):
         candidate_noise_lists = []
         tstep_lim = self.config.init_tstep_limit
         gen_num, n_exp_eps, n_exp_steps = 0, 0, 0
+        n_mut_eps = 0
         elite_noise_lists = []
         task_ids_set = set([])
         sess = make_session(single_threaded=True) # don't comment me out!
@@ -366,6 +381,8 @@ class MasterNode(Node):
             cnl_strings = ["-".join([str(idx) for idx in cnl]) for cnl in candidate_noise_lists]
             results = self.collect_gen(task_id, gen_num, cnl_strings, exp_tstart, csv_log_path, 0)
 
+            collect_tfinish = time.time()
+
             # results = [r for r in results if r['worker_gen_id'] in task_ids_set]
             # All other nodes are now wasting compute for master from here!
             mut_results =  [r for r in results if r['is_valid'] and not r['is_eval']]
@@ -374,7 +391,7 @@ class MasterNode(Node):
 
             n_exp_eps += len(mut_results+eval_results)
             n_exp_steps += sum([r['n_steps'] for r in mut_results+eval_results])
-
+            n_mut_eps += len(mut_results)
             # # Determine if the timestep limit needs to be increased
             # if self.config.adaptive_tstep_lim and \
             #         np.mean(lens==tstep_lim) > self.config.tstep_maxing_thresh:
@@ -430,7 +447,6 @@ class MasterNode(Node):
                 eval_results_agg = {}
                 elite_noise_list = None
                 top_mean = None
-
                 top_results = mut_results[-self.config.n_parents:]
                 parent_noise_lists = [r['noise_list'] for r in top_results]
 
@@ -441,18 +457,26 @@ class MasterNode(Node):
             n_bad_eps = len(results)-len(mut_results)-len(eval_results)
             skip_frac = n_bad_eps/ len(results)
             if skip_frac > 0:
-                logger.warning('Skipped {} out of date results ({:.2f}%)'.format(
-                    n_bad_eps, 100. * skip_frac))
+                logger.warning('Skipped {} out of date results ({:.2f}%) in gen {}'.format(
+                    n_bad_eps, 100. * skip_frac, gen_num))
 
             gen_tend = time.time()
-
+            logger.info("Everything but json log took {}/{}".format(
+                    (gen_tend - collect_tfinish), (gen_tend - gen_tstart)))
             # Write the short logs
             self.log_json(mut_results, eval_results,
                           eval_results_agg,
                           elite_noise_list,
-                          gen_tend, gen_tstart,  skip_frac, exp_tstart, n_exp_steps, n_exp_eps,
+                          gen_tend, gen_tstart,
+                          skip_frac,
+                          exp_tstart,
+                          n_exp_steps,
+                          n_exp_eps,
+                          n_mut_eps,
                           json_log_path)
-
+            cleanup_t = time.time()
+            logger.info("Generation cleanup took {}/{}".format(
+                    (cleanup_t-collect_tfinish), (cleanup_t-gen_tstart)))
             # Record literally everything
             # This should only be ~ 5MB for an entire experiment
             # self.log_csv(results, exp_tstart)
@@ -573,17 +597,17 @@ class MasterNode(Node):
         task_id = self.master_client.declare_task(
                 Task(parent_noise_lists=elite_nls,
                      timestep_limit=self.config.init_tstep_limit,
-                     gen_num=0))
+                     gen_num=1))
 
         # Collect the generation (a lot of work)
         enl_strings = ["-".join([str(idx) for idx in enl]) for enl in elite_nls]
-        results = self.collect_gen(task_id, 0, enl_strings, gen_tstart, csv_log_path, 0)
+        results = self.collect_gen(task_id, 1, enl_strings, gen_tstart, csv_log_path, 0)
 
         gen_tend = time.time()
 
         # All other nodes are now wasting compute for master from here!
-        for r in results:
-            assert r["is_valid"] and r["is_eval"]
+        # for r in results:
+        #     assert r["is_valid"] and r["is_eval"]
 
         eval_results = [r for r in results if r['is_valid'] and r['is_eval']]
 
@@ -600,7 +624,13 @@ class MasterNode(Node):
             eval_results_agg[enl_string]["rets"].append(er["ret"])
             eval_results_agg[enl_string]["lens"].append(er["n_steps"])
             eval_results_agg[enl_string]["workers"].append(er["worker_id"])
-
+        for enl_str, data in eval_results_agg.items():
+            if not data["count"] == self.config.n_evals:
+                logger.warning("count for candidate with noise string {} is not equal to {}".format(enl_str,
+                                                                                                    self.config.n_evals))
+                raise Exception("count for candidate with noise string {} is not equal to {}".format(enl_str,
+                                                                                                     self.config.n_evals))
+            data["mean_ret"] = np.mean(data["rets"])
 
         # Write the short logs
         self.log_json([],
@@ -654,6 +684,7 @@ class MasterNode(Node):
         # Prep for new gen results
         n_gen_eps, n_mut_eps = 0, 0
         n_gen_steps, n_mut_steps, n_eval_steps = 0, 0, 0
+        gen_bad_eps = 0
         # n_eval_eps, n_eval_steps = 0, 0
         # n_bad_eps, n_bad_steps, bad_time = 0, 0, 0, 0, 0, 0, 0
         # mut_rets, mut_lens, mut_times, mut_noise_lists = [], [], [], []
@@ -680,8 +711,12 @@ class MasterNode(Node):
             # Do I want to count evals in number of eps done?
             # Yes since used to choose elite
 
-            if not self.q.empty():
-                raise self.q.get()
+            if gen_bad_eps >= 5* self.config.episodes_per_batch:
+                logger.error("Received five times as many invalid results as are required for a whole gen")
+                logger.error("minimum eval count is {}/{}".format(min(eval_counts.values()), self.config.n_evals))
+                raise Exception("Too many invalid results")
+            if not self.exception_queue.empty():
+                raise self.exception_queue.get()
 
             worker_task_id, r = self.master_client.pop_result()
 
@@ -727,10 +762,11 @@ class MasterNode(Node):
                     n_mut_eps += 1
                     n_mut_steps += r.n_steps
                     worker_mut_counts[r.worker_id] = worker_mut_counts.get(r.worker_id, 0) + 1
-
-        # if master_gen_num >=1:
-        #     for c, count in eval_counts.items():
-        #         assert count == self.config.n_evals
+            else:
+                gen_bad_eps += 1
+        if master_gen_num >=1:
+            for c, count in eval_counts.items():
+                assert count == self.config.n_evals
         # assert n_eval_steps < n_mut_steps
         return results
 
@@ -826,7 +862,13 @@ class MasterNode(Node):
                  eval_results,
                  eval_results_agg,
                  elite_noise_list,
-                 gen_tend, gen_tstart, skip_frac, exp_tstart, n_exp_steps, n_exp_eps,
+                 gen_tend,
+                 gen_tstart,
+                 skip_frac,
+                 exp_tstart,
+                 n_exp_steps,
+                 n_exp_eps,
+                 n_mut_eps,
                  json_log_path):
 
         # eval_rets = [r['ret'] for r in eval_results]
@@ -841,6 +883,9 @@ class MasterNode(Node):
         eval_means = None if not eval_results_agg else [x["mean_ret"] for x in eval_results_agg.values()]
 
         unique_workers = set([r['worker_id'] for r in mut_results + eval_results])
+        if len(unique_workers) < 0.8 * self.n_workers * self.n_nodes:
+            logger.warning("Workers that actually made a submssion: {}/{}".format(
+                    len(unique_workers), self.n_workers * self.n_nodes))
         worker_eps = {}
         for w in unique_workers:
             worker_eps[w] = len([r for r in mut_results + eval_results if r['worker_id'] == w])
@@ -928,8 +973,9 @@ class WorkerNode(Node):
         # subprocess.call("tmux kill-session redis-relay", shell=True)
         #
         # logger.info("Node {} has joined all processes. Experiment finished.".format(self.node_id))
+        self.start_workers(n_gifs=0, gif_path=log_dir)
 
-        raise self.q.get(block=True)
+        raise self.exception_queue.get(block=True)
 
     def get_n_workers(self):
         if self.n_workers:
