@@ -7,10 +7,10 @@
     "timesteps_per_batch": 1000,
     "init_tstep_limit":1000,
     "min_gen_time":0.2,
-    "n_parents": 100,
+    "n_parents": 20,
     "n_elite_candidates": 10,
     "n_evals": 100,
-    "n_redundant_evals": 5
+    "n_redundant_evals": 20
   },
   "policy": {
     "args": {

@@ -47,6 +47,7 @@ if __name__ == "__main__":
         log_dir =os.path.join("logs", args.super_exp_id, args.env_id, args.global_seed)
 
 
+
     if not os.path.isdir(log_dir):
         os.makedirs(log_dir)
     log_level = logging.INFO # if os.environ["SLURMD_NODENAME"]=="login-e-13" else logging.INFO

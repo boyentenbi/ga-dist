@@ -569,6 +569,144 @@ class TimeConvDiscreteOutPolicy(Policy):
                                save_obs=save_obs,
                                random_stream=random_stream)
 
+class MetaMazePolicy(Policy):
+    def _initialize(self, ob_space, ac_space, kernel_size,
+                    n_channels, nonlin_type, n_blocks, layers_per_block):
+        self.n_blocks = n_blocks
+        self.layers_per_block = layers_per_block
+        self.ac_space = ac_space
+        self.ob_space = ob_space
+        self.kernel_size = kernel_size
+        self.n_channels = n_channels
+
+        assert len(ob_space.shape) == 1
+        assert len(self.ac_space.shape) == 0
+        # assert np.all(np.isfinite(self.ac_space.low)) and np.all(np.isfinite(self.ac_space.high)), \
+        #     'Action bounds required'
+
+        self.nonlin = {'tanh': tf.tanh,
+                       'relu': tf.nn.relu,
+                       'lrelu': U.lrelu,
+                       'elu': tf.nn.elu}[nonlin_type]
+
+        with tf.variable_scope(type(self).__name__) as scope:
+            # Policy network
+            #logger.info("Observation space has shape {}".format(ob_space.shape))
+            o = tf.placeholder(tf.float32, [None, self.ob_space.shape[0]])
+            self.clear_ops, self.fill_ops, self.push_ops, ps  = self._make_net(o)
+
+            self._act = U.function(inputs=[o], outputs=ps, updates=self.push_ops)
+
+        U.get_session().run(self.clear_ops)
+        U.get_session().run(self.fill_ops)
+
+        queue_sizes = U.get_session().run([q.size() for q in self.qs])
+        for i, qs in enumerate(queue_sizes):
+            assert qs == 2**(i%self.layers_per_block)
+
+        return scope
+
+    def _make_net(self, x):
+
+        h = x
+        self.qs = []
+        fill_ops = []
+        clear_ops = []
+        push_ops = []
+        state_size = self.ac_space.n+2
+        for b in range(self.n_blocks):
+            for i in range(self.layers_per_block):
+                rate = 2 ** i
+                name = 'b{}-l{}'.format(b, i)
+
+                q = tf.FIFOQueue(capacity=rate,
+                                 dtypes=tf.float32,
+                                 shapes=(1, state_size,))
+                self.qs.append(q)
+
+                clear = q.dequeue_many(q.size())
+                fill = q.enqueue_many(tf.zeros((rate, 1, state_size)))
+
+                push = q.enqueue([h])
+                state_ = q.dequeue()
+
+                clear_ops.append(clear)
+                fill_ops.append(fill)
+                push_ops.append(push)
+
+                r = tf.layers.dense(tf.concat([state_, h], axis = 1), self.n_channels, activation=tf.nn.relu)
+                h = tf.concat([r,h], axis = 1)
+                state_size += self.n_channels
+
+        ps = tf.layers.dense(h, self.ac_space.n,  activation = tf.nn.softmax)
+
+
+
+        # # Initialize queues.
+        # U.get_session().run(self.init_ops)
+
+        return  clear_ops, fill_ops, push_ops, ps
+
+    def act(self, ob, random_stream=None):
+        if random_stream:
+            return random_stream.choice(range(self.ac_space.n), self._act(ob)[0])
+        else:
+            p = self._act(ob)[0]
+            return np.random.choice(self.ac_space.n, p=p)
+
+    @property
+    def needs_ob_stat(self):
+        return False
+
+    @property
+    def needs_ref_batch(self):
+        return False
+
+    def set_ob_stat(self, ob_mean, ob_std):
+        self._set_ob_mean_std(ob_mean, ob_std)
+
+    def initialize_from(self, filename, ob_stat=None):
+        """
+        Initializes weights from another policy, which must have the same architecture (variable names),
+        but the weight arrays can be smaller than the current policy.
+        """
+        with h5py.File(filename, 'r') as f:
+            f_var_names = []
+            f.visititems(lambda name, obj: f_var_names.append(name) if isinstance(obj, h5py.Dataset) else None)
+            assert set(v.name for v in self.all_variables) == set(f_var_names), 'Variable names do not match'
+
+            init_vals = []
+            for v in self.all_variables:
+                shp = v.get_shape().as_list()
+                f_shp = f[v.name].shape
+                assert len(shp) == len(f_shp) and all(a >= b for a, b in zip(shp, f_shp)), \
+                    'This policy must have more weights than the policy to load'
+                init_val = v.eval()
+                # ob_mean and ob_std are initialized with nan, so set them manually
+                if 'ob_mean' in v.name:
+                    init_val[:] = 0
+                    init_mean = init_val
+                elif 'ob_std' in v.name:
+                    init_val[:] = 0.001
+                    init_std = init_val
+                # Fill in subarray from the loaded policy
+                init_val[tuple([np.s_[:s] for s in f_shp])] = f[v.name]
+                init_vals.append(init_val)
+            self.set_all_vars(*init_vals)
+
+        if ob_stat is not None:
+            ob_stat.set_from_init(init_mean, init_std, init_count=1e5)
+
+    def rollout(self, env, *, render=False, timestep_limit=None, save_obs=False, random_stream=None):
+
+        U.get_session().run(self.clear_ops)
+        U.get_session().run(self.fill_ops)
+
+
+        return super().rollout(env=env, render=render,
+                               timestep_limit=timestep_limit,
+                               save_obs=save_obs,
+                               random_stream=random_stream)
 
 class AtariPolicy(Policy):
     def _initialize(self, ob_space, ac_space, kernel_sizes, strides, n_channels, hidden_dims, nonlin_type):

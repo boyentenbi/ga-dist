@@ -1,0 +1,19 @@
+Changed directory to /home/pc517/ga-dist/distributed.
+
+JobID: 1940968
+======
+Time: Wed May 16 07:12:44 BST 2018
+Running on master node: cpu-e-228
+Current directory: /home/pc517/ga-dist/distributed
+
+Nodes allocated:
+================
+cpu-e-228 cpu-e-229 cpu-e-230 cpu-e-231 cpu-e-232 cpu-e-233 cpu-e-234 cpu-e-235
+
+numtasks=256, numnodes=8, mpi_tasks_per_node=32 (OMP_NUM_THREADS=1)
+
+Executing command:
+==================
+
+
+slurmstepd: error: *** JOB 1940968 ON cpu-e-228 CANCELLED AT 2018-05-16T10:36:16 ***

@@ -363,15 +363,32 @@ class MasterNode(Node):
         tf_util.initialize()
 
         exp_tstart = time.time()
+        gen_tstart_old = None
         # Iterate over generations
         while n_exp_steps < self.config.n_tsteps:
 
-            gen_tstart = time.time()
+            gen_tstart_new = time.time()
+
 
             task_id = self.master_client.declare_task(
                     Task(parent_noise_lists=parent_noise_lists,
                          timestep_limit=self.config.init_tstep_limit,
                          gen_num=gen_num))
+            # do the json logging after declaring the new task because it takes a non-negligible amount of time!
+            if gen_num >=1:
+                self.log_json(mut_results, eval_results,
+                              eval_results_agg,
+                              elite_noise_list,
+                              gen_tend, gen_tstart_old,
+                              skip_frac,
+                              exp_tstart,
+                              n_exp_steps,
+                              n_exp_eps,
+                              n_mut_eps,
+                              json_log_path)
+                cleanup_t = time.time()
+                logger.info("Generation cleanup took {} after prev gen end".format(
+                        (cleanup_t - gen_tend)))
 
             if task_id in task_ids_set:
                 logger.warning("declaring a generation with the same task id as one before!")
@@ -462,24 +479,14 @@ class MasterNode(Node):
 
             gen_tend = time.time()
             logger.info("Everything but json log took {}/{}".format(
-                    (gen_tend - collect_tfinish), (gen_tend - gen_tstart)))
+                    (gen_tend - collect_tfinish), (gen_tend - gen_tstart_new)))
             # Write the short logs
-            self.log_json(mut_results, eval_results,
-                          eval_results_agg,
-                          elite_noise_list,
-                          gen_tend, gen_tstart,
-                          skip_frac,
-                          exp_tstart,
-                          n_exp_steps,
-                          n_exp_eps,
-                          n_mut_eps,
-                          json_log_path)
-            cleanup_t = time.time()
-            logger.info("Generation cleanup took {}/{}".format(
-                    (cleanup_t-collect_tfinish), (cleanup_t-gen_tstart)))
+
             # Record literally everything
             # This should only be ~ 5MB for an entire experiment
             # self.log_csv(results, exp_tstart)
+            gen_tstart_old = gen_tstart_new
+
             gen_num += 1
 
         logger.info("Finished {} generations in {} timesteps.".format(gen_num, n_exp_steps))
@@ -872,6 +879,7 @@ class MasterNode(Node):
                  json_log_path):
 
         # eval_rets = [r['ret'] for r in eval_results]
+
         eval_lens = [r['n_steps'] for r in eval_results]
         mut_rets = [r['ret'] for r in mut_results]
         mut_lens = [r['n_steps'] for r in mut_results]
