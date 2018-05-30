@@ -1,7 +1,4 @@
 # ga-dist
-The idea of this project is to use evolutionary algorithms to do MAML (Finn et al https://arxiv.org/abs/1703.03400), but looping over data-collection -> gradient update multiple times, rather than just doing it once. 
-
-The evolutionary algorithm is critical, as we can't do multiple gradient updates in a principled way with a gradient-based method. It's also faster.
 
 The GA I'm using is distributed truncation selection running on Cambridge's Peta4 cluster.
 
