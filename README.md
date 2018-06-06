@@ -25,29 +25,12 @@ Running `sbatch slurm_python.peta4` on a login node launches a single experiment
 
 The algorithm, truncation selection, (see https://en.wikipedia.org/wiki/Selection_(genetic_algorithm)) is run with a low bandwidth requirement using the following trick: each node generates 1GB of Gaussian noise before the experiment starts. The parameters of a neural network can be described using indices into this noise, the number of neural network parameters and a known initialization scheme. To communicate the fitness of a parameterization thus generated (a 'result') we need only send these indices and the fitness (a single sample of the return). The number of 'noise indices' is equal to the number of generations completed. Since this is on the order of 1000, each result is at most ~1kB in size. 
 
-# Current progress
+# gifs!
+Atari:
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/atlantisshort.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/kangarooshort.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/seaquestshort.gif)
+Meta-RL: 
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/saccadeshort.gif)
 
-Changed the fork to use the conceptually simpler truncation selection algorithm (as per http://eng.uber.com/wp-content/uploads/2017/12/deep-ga-arxiv.pdf).
-
-Heavy refactoring of the original `es.py` and `dist.py` into 'Node' and 'Client' classes according to my own intuition.
-
-Added compatibility for Atari environments (DeepMind configuration).
-
-Added more logging and inspection notebooks.
-
-Successful Atari run on 256 cores:
-
-
-
-# Next steps
-
-Full run of 11 Atari games (at least 10 seeds each).
-
-Wall-clock-time vs. core-number scaling tests.
-
-Briefly waiting for cluster changes to perform roboschool experiments.
-
-GA-MAML on ant meta-task
-
-Multi-episode environment with alternating rollouts and learned updates
 
