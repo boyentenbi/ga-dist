@@ -30,6 +30,17 @@ Atari:
 ![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/atlantisshort.gif)
 ![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/kangarooshort.gif)
 ![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/seaquestshort.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/asteroidsshort.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/asterixshort.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/assaultshort.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/frostbiteshort.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/enduroshort.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/Skiing-1--6520.0-37476.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/zaxxonshort.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/ventureshort.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/Gravitar-3-950.0-15315.gif)
+![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/Amidar-0-0-373.0.gif)
+
 Meta-RL: 
 ![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/saccadeshort.gif)
 
