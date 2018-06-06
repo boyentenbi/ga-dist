@@ -25,8 +25,7 @@ Running `sbatch slurm_python.peta4` on a login node launches a single experiment
 
 The algorithm, truncation selection, (see https://en.wikipedia.org/wiki/Selection_(genetic_algorithm)) is run with a low bandwidth requirement using the following trick: each node generates 1GB of Gaussian noise before the experiment starts. The parameters of a neural network can be described using indices into this noise, the number of neural network parameters and a known initialization scheme. To communicate the fitness of a parameterization thus generated (a 'result') we need only send these indices and the fitness (a single sample of the return). The number of 'noise indices' is equal to the number of generations completed. Since this is on the order of 1000, each result is at most ~1kB in size. 
 
-# gifs!
-Atari:
+# Atari gifs
 ![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/atlantisshort.gif)
 ![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/kangarooshort.gif)
 ![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/seaquestshort.gif)
@@ -41,7 +40,7 @@ Atari:
 ![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/Gravitar-3-950.0-15315.gif)
 ![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/Amidar-0-0-373.0.gif)
 
-Meta-RL: 
+# Meta-RL gif: 
 ![Alt Text](https://github.com/boyentenbi/ga-dist/blob/master/saccadeshort.gif)
 
 
